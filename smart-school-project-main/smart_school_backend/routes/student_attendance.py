@@ -21,7 +21,10 @@ def mark_student_attendance():
     data = request.get_json() or {}
     student_id = data.get("student_id")
     status = data.get("status", "present")
-    date = date_module.today().strftime("%Y-%m-%d")
+    
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    marked_at_ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
     if not student_id:
         return jsonify({"error": "student_id is required"}), 400
@@ -41,15 +44,15 @@ def mark_student_attendance():
         return jsonify({"error": "class_name for student not found"}), 400
 
     try:
-        # Insert or update attendance (include class_name)
+        # Insert or update attendance (include class_name and marked_at)
         cur.execute(
             """
-            INSERT INTO student_attendance (student_id, class_name, date, status)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO student_attendance (student_id, class_name, date, status, marked_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(student_id, date)
-            DO UPDATE SET status=excluded.status
+            DO UPDATE SET status=excluded.status, marked_at=excluded.marked_at
             """,
-            (student_id, class_name, date, status),
+            (student_id, class_name, date, status, marked_at_ts),
         )
         db.commit()
 

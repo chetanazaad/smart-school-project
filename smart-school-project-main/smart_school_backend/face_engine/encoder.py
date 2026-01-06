@@ -22,20 +22,19 @@ def generate_embedding(image_base64: str):
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
         print(f"Encoder: Original image size: {image.width}x{image.height}")
 
-        max_size = 800
-        if image.width > max_size or image.height > max_size:
-            ratio = max_size / max(image.width, image.height)
-            new_width = int(image.width * ratio)
-            new_height = int(image.height * ratio)
+        # Save the received image for debugging
+        try:
+            debug_image_path = "debug_image.jpg"
+            image.save(debug_image_path, "JPEG")
+            print(f"Encoder: Debug image saved to {debug_image_path}")
+            
+            # Re-load the image from disk to ensure it's clean
+            print("Encoder: Reloading debug image from disk")
+            image_np = face_recognition.load_image_file(debug_image_path)
 
-            if new_width == 0 or new_height == 0:
-                print(f"Error: Invalid resize dimensions calculated ({new_width}x{new_height}). Skipping face recognition.")
-                return None
-
-            print(f"Encoder: Resizing to {new_width}x{new_height}")
-            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        image_np = np.array(image)
+        except Exception as e:
+            print(f"Encoder: Error saving or reloading debug image: {e}")
+            return None
         
         print("Encoder: 4. Detecting face locations")
         face_locations = face_recognition.face_locations(image_np)
