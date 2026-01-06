@@ -160,7 +160,7 @@ export default function AdminAttendancePage() {
         onMarked={(data) => {
           setLastMarked(data);
           loadAttendanceLogs();
-          // keep modal open for continuous recognition
+          setOpenModal(false); // Close modal after successful recognition
         }}
       />
     </div>

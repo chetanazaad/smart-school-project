@@ -36,11 +36,15 @@ def mark_teacher_attendance():
     """
     data = request.get_json() or {}
     teacher_id = data.get("teacher_id")
+    status = data.get("status", "present")
 
     if not teacher_id:
         return jsonify({"error": "teacher_id is required"}), 400
 
-    today = date_module.today().isoformat()
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    marked_at_ts = now.strftime("%Y-%m-%d %H:%M:%S")
+    
     db = get_db()
     cur = db.cursor()
 
@@ -48,22 +52,16 @@ def mark_teacher_attendance():
         cur.execute(
             """
             INSERT INTO teacher_attendance (teacher_id, date, status, marked_at)
-            VALUES (?, ?, 'present', ?)
-            ON CONFLICT(teacher_id, date) DO NOTHING
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(teacher_id, date) 
+            DO UPDATE SET status=excluded.status, marked_at=excluded.marked_at
             """,
-            (teacher_id, today, datetime.now().isoformat()),
+            (teacher_id, date, status, marked_at_ts),
         )
         db.commit()
         
-        if cur.rowcount > 0:
-            return jsonify({"message": "Attendance marked successfully"}), 201
-        else:
-            return jsonify({"message": "Attendance already marked for today"}), 200
+        return jsonify({"message": "Attendance marked successfully"}), 200
 
-    except sqlite3.IntegrityError:
-        # This is a fallback in case the UNIQUE constraint is violated
-        # in a way that ON CONFLICT doesn't catch (unlikely).
-        return jsonify({"message": "Attendance already marked for today"}), 200
     except Exception as e:
         current_app.logger.error("Failed to mark teacher attendance: %s", e)
         return jsonify({"error": "Server error while marking attendance"}), 500
