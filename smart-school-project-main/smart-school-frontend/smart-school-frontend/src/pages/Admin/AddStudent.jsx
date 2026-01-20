@@ -13,9 +13,13 @@ export default function AddStudent() {
     email: "",
     class_name: "1",
     section: "A",
+    password: "",
+    confirmPassword: "",
   });
   const [createdId, setCreatedId] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -34,14 +38,32 @@ export default function AddStudent() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
 
-    if (!imageBase64) {
-      alert("Please enroll the student's face using the camera before submitting.");
+    // Validation
+    if (!form.name || !form.email || !form.password) {
+      setError("All fields are required");
       return;
     }
 
+    if (form.password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+
+    if (form.password !== form.confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+
+    if (!imageBase64) {
+      setError("Please enroll the student's face using the camera before submitting.");
+      return;
+    }
+
+    setLoading(true);
     try {
-      // 1) Create student record
+      // 1) Create student record AND user account
       const createRes = await API.post("/students", {
         roll_number: form.roll_number,
         id_code: form.id_code,
@@ -49,6 +71,7 @@ export default function AddStudent() {
         email: form.email,
         class_name: form.class_name,
         section: form.section || "",
+        password: form.password,
       });
 
       const studentId = createRes.data?.id;
@@ -67,7 +90,9 @@ export default function AddStudent() {
       navigate("/admin/students");
     } catch (err) {
       console.error("Add student failed:", err);
-      alert("Enrollment failed. See console for details.");
+      setError(err.response?.data?.error || "Enrollment failed. See console for details.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -75,7 +100,13 @@ export default function AddStudent() {
     <div className="p-6">
       <h2 className="text-2xl font-semibold mb-5">Add Student</h2>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      {error && (
+        <div className="mb-4 p-4 bg-red-100 text-red-700 rounded border border-red-200">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4 max-w-md">
 
         <div className="flex items-center gap-2">
           <input
@@ -112,14 +143,17 @@ export default function AddStudent() {
           value={form.name}
           onChange={handleChange}
           className="border p-3 rounded w-full"
+          required
         />
 
         <input
           name="email"
+          type="email"
           placeholder="Email"
           value={form.email}
           onChange={handleChange}
           className="border p-3 rounded w-full"
+          required
         />
 
         <label className="block">
@@ -140,6 +174,31 @@ export default function AddStudent() {
           </select>
         </label>
 
+        <div className="bg-blue-50 p-4 rounded border border-blue-200">
+          <h3 className="font-semibold text-blue-900 mb-3">Login Credentials</h3>
+          
+          <input
+            name="password"
+            type="password"
+            placeholder="Password"
+            value={form.password}
+            onChange={handleChange}
+            className="border p-3 rounded w-full mb-2"
+            required
+          />
+
+          <input
+            name="confirmPassword"
+            type="password"
+            placeholder="Confirm Password"
+            value={form.confirmPassword}
+            onChange={handleChange}
+            className="border p-3 rounded w-full"
+            required
+          />
+          <p className="text-sm text-gray-600 mt-2">Password must be at least 6 characters</p>
+        </div>
+
         <div>
           <label className="block text-sm font-medium mb-2">Enroll Face (required)</label>
           <CameraCapture onCapture={(b64) => setImageBase64(b64)} />
@@ -150,9 +209,10 @@ export default function AddStudent() {
 
         <button
           type="submit"
-          className="bg-blue-600 text-white px-4 py-2 rounded"
+          disabled={loading}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 w-full"
         >
-          Add Student
+          {loading ? "Adding..." : "Add Student"}
         </button>
       </form>
     </div>

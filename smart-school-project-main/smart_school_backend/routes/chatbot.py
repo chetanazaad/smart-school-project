@@ -11,9 +11,8 @@ except ImportError as e:
 chatbot_bp = Blueprint("chatbot", __name__)
 
 # --- CONFIGURATION ---
-# For better security, it is highly recommended to use environment variables
-# instead of hardcoding the key.
-GEMINI_API_KEY = "AIzaSyAC1EhNx89bDFsyqEnIfewMOrhjPR0tuuo"
+# For better security, use environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Get from env variable
 
 model = None
 
@@ -25,22 +24,27 @@ if genai and GEMINI_API_KEY:
         # List available models to find a valid one
         print("🔍 Checking available Gemini models...")
         model_name = None
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"   - {m.name}")
-                if not model_name: model_name = m.name # Pick first available
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    print(f"   - {m.name}")
+                    if not model_name: model_name = m.name # Pick first available
+        except Exception as model_err:
+            print(f"   ⚠️ Could not list models: {model_err}")
         
         if not model_name: model_name = 'gemini-1.5-flash' # Fallback
         print(f"👉 Using model: {model_name}")
         model = genai.GenerativeModel(model_name)
     except Exception as e:
-        print(f"❌ Error configuring Gemini or creating model: {e}")
+        print(f"❌ Error configuring Gemini: {e}")
+        print("   Chatbot will not be available")
+        model = None
 else:
-    print("="*60)
-    print("⚠️ WARNING: Gemini API Key is not set or google.generativeai is not installed.")
-    print("   The chatbot will not function. Please set the GEMINI_API_KEY")
-    print("   environment variable or edit smart_school_backend/routes/chatbot.py.")
-    print("="*60)
+    if not genai:
+        print("⚠️ WARNING: google.generativeai is not installed")
+    if not GEMINI_API_KEY:
+        print("⚠️ WARNING: GEMINI_API_KEY environment variable not set")
+    print("   Chatbot will not be available (optional feature)")
 
 # The route is now an empty string, which correctly maps to "/api/chatbot"
 # without causing a redirect.

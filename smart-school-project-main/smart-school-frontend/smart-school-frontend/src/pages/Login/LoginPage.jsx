@@ -55,7 +55,8 @@ export default function LoginPage() {
       setTimeout(() => {
         if (role === "admin") navigate("/admin/dashboard");
         else if (role === "teacher") navigate("/teacher/dashboard");
-        else navigate("/student/dashboard");
+        else if (role === "student") navigate("/student/dashboard");
+        else if (role === "parent") navigate("/parent/dashboard");
       }, 200);
 
     } catch (err) {
@@ -115,6 +116,7 @@ export default function LoginPage() {
               <option value="admin">Admin</option>
               <option value="teacher">Teacher</option>
               <option value="student">Student</option>
+              <option value="parent">Parent</option>
             </select>
           </div>
 

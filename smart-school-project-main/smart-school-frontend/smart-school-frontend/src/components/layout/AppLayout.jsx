@@ -11,6 +11,7 @@ import {
   FiPieChart,
   FiMessageCircle,
   FiUpload,
+  FiSettings,
 } from "react-icons/fi";
 
 const AppLayout = ({ children }) => {
@@ -23,12 +24,15 @@ const AppLayout = ({ children }) => {
     { section: "Management" },
     { label: "Students", path: "/admin/students", icon: <FiUsers /> },
     { label: "Teachers", path: "/admin/teachers", icon: <FiUsers /> },
+    { label: "Parents", path: "/admin/parents", icon: <FiUsers /> },
     { section: "Academics" },
     { label: "Timetable", path: "/admin/timetable", icon: <FiBookOpen /> },
     { section: "AI" },
     { label: "AI Reports", path: "/admin/ai-reports", icon: <FiPieChart /> },
     { section: "Chat" },
     { label: "Chatbot", path: "/chatbot", icon: <FiMessageCircle /> },
+    { section: "Account" },
+    { label: "Settings", path: "/admin/settings", icon: <FiSettings /> },
   ];
 
   const teacherMenu = [

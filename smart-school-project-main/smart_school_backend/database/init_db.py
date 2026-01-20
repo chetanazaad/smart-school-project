@@ -138,6 +138,20 @@ def init_db():
     )
     """)
 
+    # ----------------------------------------------------
+    # PARENTS TABLE
+    # ----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS parents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_code TEXT UNIQUE,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        phone TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     print("✔ All tables created successfully")
 
     # ----------------------------------------------------

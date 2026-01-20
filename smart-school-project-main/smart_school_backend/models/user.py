@@ -48,6 +48,17 @@ def create_user(name, email, password, role):
     return cur.lastrowid
 
 
+# Fetch user by ID
+def get_user_by_id(user_id):
+    db = get_db()
+    cur = db.cursor()
+
+    cur.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    row = cur.fetchone()
+
+    return dict(row) if row else None
+
+
 # Validate login
 def validate_user(email, password):
     user = get_user_by_email(email)
@@ -58,3 +69,35 @@ def validate_user(email, password):
         return user
 
     return None
+
+
+# Update user email
+def update_user_email(user_id, new_email):
+    db = get_db()
+    cur = db.cursor()
+
+    cur.execute("""
+        UPDATE users
+        SET email = ?
+        WHERE id = ?
+    """, (new_email, user_id))
+
+    db.commit()
+    return True
+
+
+# Update user password
+def update_user_password(user_id, new_password):
+    db = get_db()
+    cur = db.cursor()
+
+    hashed_pw = generate_password_hash(new_password)
+
+    cur.execute("""
+        UPDATE users
+        SET password = ?
+        WHERE id = ?
+    """, (hashed_pw, user_id))
+
+    db.commit()
+    return True

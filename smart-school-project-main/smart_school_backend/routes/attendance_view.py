@@ -1,37 +1,72 @@
 # routes/attendance_view.py
-
 from flask import Blueprint, jsonify, request
-from utils.db import get_db
-from flask import Blueprint, request, jsonify
-from utils.db import get_db
-
+from smart_school_backend.utils.db import get_db
 
 attendance_view_bp = Blueprint("attendance_view", __name__)
 
 @attendance_view_bp.route("/all", methods=["GET"])
 def get_all_attendance():
-    db = get_db()
-    role = request.args.get("role")  # "student" or "teacher" or None
-    date = request.args.get("date")
-
-    base_query = """
-        SELECT id, name, role, date, time
-        FROM attendance_records
-        WHERE 1=1
     """
+    Fetches a unified list of attendance records for both students and teachers.
+    Can be filtered by role and date.
+    """
+    db = get_db()
+    cur = db.cursor()
+    
+    role = request.args.get("role")  # "student" or "teacher"
+    date = request.args.get("date")  # YYYY-MM-DD
+    limit = request.args.get("limit", 20, type=int)
 
+    queries = []
     params = []
 
-    if role:
-        base_query += " AND role = ?"
-        params.append(role)
+    # Prepare student query if needed
+    if not role or role == 'student':
+        student_query = "SELECT s.id, s.name, 'student' as role, sa.date, sa.status, sa.marked_at as time FROM student_attendance sa JOIN students s ON sa.student_id = s.id"
+        clauses = []
+        if date:
+            clauses.append("sa.date = ?")
+            params.append(date)
+        if clauses:
+            student_query += " WHERE " + " AND ".join(clauses)
+        queries.append(student_query)
 
-    if date:
-        base_query += " AND date = ?"
-        params.append(date)
+    # Prepare teacher query if needed
+    if not role or role == 'teacher':
+        teacher_query = "SELECT t.id, t.name, 'teacher' as role, ta.date, ta.status, ta.marked_at as time FROM teacher_attendance ta JOIN teachers t ON ta.teacher_id = t.id"
+        clauses = []
+        if date:
+            clauses.append("ta.date = ?")
+            params.append(date)
+        if clauses:
+            teacher_query += " WHERE " + " AND ".join(clauses)
+        queries.append(teacher_query)
 
-    rows = db.execute(base_query, params).fetchall()
+    if not queries:
+        return jsonify({"records": []}), 200
 
-    data = [dict(row) for row in rows]
+    # Combine queries with UNION ALL
+    final_query = " UNION ALL ".join([f"({q})" for q in queries])
+    
+    # Add ordering and limit
+    final_query += " ORDER BY time DESC"
+    if limit:
+        final_query += " LIMIT ?"
+        params.append(limit)
 
-    return jsonify({"records": data}), 200
+    try:
+        cur.execute(final_query, params)
+        rows = cur.fetchall()
+        
+        data = [dict(row) for row in rows]
+        
+        return jsonify({"records": data}), 200
+        
+    except Exception as e:
+        import traceback
+        print(f"Error fetching all attendance. Query: {final_query}, Params: {params}")
+        print("Error:", e)
+        traceback.print_exc()
+        # Return an empty list if a table doesn't exist, etc.
+        # This can happen if no students/teachers have been marked present yet.
+        return jsonify({"records": [], "error": str(e)}), 200

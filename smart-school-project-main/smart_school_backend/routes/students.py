@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 import sqlite3
 import os
+from models.user import create_user
 
 bp = Blueprint("students", __name__)
 
@@ -52,12 +53,15 @@ def create_student():
         email = data.get("email")
         class_name = data.get("class_name")
         section = data.get("section")
+        password = data.get("password")
 
         if not name or not email:
             return jsonify({"error": "name and email required"}), 400
 
         conn = get_db()
         cur = conn.cursor()
+        
+        # Create student record
         if id_code:
             cur.execute("INSERT INTO students (name, email, id_code, class_name, section) VALUES (?, ?, ?, ?, ?)",
                         (name, email, id_code, class_name, section))
@@ -65,7 +69,20 @@ def create_student():
             cur.execute("INSERT INTO students (name, email, class_name, section) VALUES (?, ?, ?, ?)",
                         (name, email, class_name, section))
         conn.commit()
-        return jsonify({"message": "Student created", "id": cur.lastrowid}), 201
+        student_id = cur.lastrowid
+
+        # Create user account if password provided
+        if password:
+            try:
+                user_id = create_user(name=name, email=email, password=password, role="student")
+                return jsonify({"message": "Student created with login credentials", "id": student_id, "user_id": user_id}), 201
+            except Exception as user_err:
+                # Student created but user creation failed (maybe email exists)
+                print(f"Warning: Student created (id={student_id}) but user creation failed:", user_err)
+                return jsonify({"message": "Student created but login credentials could not be set (email may already exist)", "id": student_id}), 201
+        else:
+            return jsonify({"message": "Student created", "id": student_id}), 201
+            
     except Exception as e:
         print("ERROR create_student:", e)
         return jsonify({"error": "Failed to create student"}), 500

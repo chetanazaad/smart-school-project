@@ -1,7 +1,7 @@
 # smart_school_backend/routes/timetable.py
 
 from flask import Blueprint, request, jsonify, current_app
-from utils.db import get_db
+from smart_school_backend.utils.db import get_db
 from flask_jwt_extended import jwt_required
 from datetime import datetime, date as date_module
 
@@ -41,39 +41,58 @@ def get_timetable(class_name, section):
 
 
 # ------------------------------
-# Add Timetable Entry
+# Add Timetable Entry (Admin Dashboard)
 # ------------------------------
-@bp.route("/", methods=["POST"])
+@bp.route("/add", methods=["POST"])
 @jwt_required()
 def add_timetable():
+    """
+    Add a timetable entry. Used by admin dashboard.
+    
+    POST /api/timetable/add
+    
+    Request body: {
+        "class_name": "10",
+        "section": "A",
+        "subject": "Math",
+        "teacher_name": "Ratan",
+        "day": "Monday",
+        "start_time": "09:00",
+        "end_time": "09:40"
+    }
+    """
     data = request.json
 
     required = ["class_name", "section", "subject", "teacher_name", "day", "start_time", "end_time"]
 
     if not all(k in data and data[k] for k in required):
-        return jsonify({"error": "All fields are required"}), 400
+        return jsonify({"error": "All fields are required: " + ", ".join(required)}), 400
 
     db = get_db()
     cursor = db.cursor()
 
-    cursor.execute(
-        """
-        INSERT INTO timetable (class_name, section, subject, teacher_name, day, start_time, end_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            data["class_name"],
-            data["section"],
-            data["subject"],
-            data["teacher_name"],
-            data["day"],
-            data["start_time"],
-            data["end_time"],
-        ),
-    )
+    try:
+        cursor.execute(
+            """
+            INSERT INTO timetable (class_name, section, subject, teacher_name, day, start_time, end_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["class_name"],
+                data["section"],
+                data["subject"],
+                data["teacher_name"],
+                data["day"],
+                data["start_time"],
+                data["end_time"],
+            ),
+        )
 
-    db.commit()
-    return jsonify({"message": "Timetable entry added successfully"}), 201
+        db.commit()
+        return jsonify({"message": "Timetable entry added successfully", "id": cursor.lastrowid}), 201
+    except Exception as e:
+        current_app.logger.error("add_timetable failed: %s", e)
+        return jsonify({"error": "Failed to add timetable entry"}), 500
 
 
 # ------------------------------
@@ -154,3 +173,176 @@ def teacher_attendance_today(teacher_id):
 
     return jsonify({"present": present}), 200
 
+
+# -------------------------------------------------------------------
+# STUDENT DASHBOARD → GET TIMETABLE FOR THE WEEK
+# -------------------------------------------------------------------
+@bp.route("/student/<int:student_id>/week", methods=["GET"])
+@jwt_required()
+def get_student_timetable(student_id):
+    """
+    Get timetable for a student for the entire week.
+    The student's class and section are retrieved from the students table.
+    Returns timetable entries sorted by day and time.
+    
+    GET /api/timetable/student/{student_id}/week
+    
+    Returns: {
+        "student_name": "John",
+        "class_name": "10",
+        "section": "A",
+        "timetable": [
+            {
+                "day": "Monday",
+                "subject": "Math",
+                "teacher_name": "Ratan",
+                "start_time": "09:00",
+                "end_time": "09:40"
+            },
+            ...
+        ]
+    }
+    """
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        # Get student's class and section
+        cursor.execute(
+            "SELECT name, class_name, section FROM students WHERE id = ?",
+            (student_id,)
+        )
+        student = cursor.fetchone()
+        
+        if not student:
+            return jsonify({"error": "Student not found"}), 404
+        
+        student_name, class_name, section = student
+        
+        # Get timetable for this student's class
+        cursor.execute(
+            """SELECT id, day, subject, teacher_name, start_time, end_time
+               FROM timetable 
+               WHERE class_name = ? AND section = ?
+               ORDER BY CASE 
+                   WHEN day='Monday' THEN 1
+                   WHEN day='Tuesday' THEN 2
+                   WHEN day='Wednesday' THEN 3
+                   WHEN day='Thursday' THEN 4
+                   WHEN day='Friday' THEN 5
+                   WHEN day='Saturday' THEN 6
+                   WHEN day='Sunday' THEN 7
+               END, start_time""",
+            (class_name, section)
+        )
+        
+        rows = cursor.fetchall()
+        
+        timetable = [
+            {
+                "id": r[0],
+                "day": r[1],
+                "subject": r[2],
+                "teacher_name": r[3],
+                "start_time": r[4],
+                "end_time": r[5]
+            }
+            for r in rows
+        ]
+        
+        return jsonify({
+            "student_name": student_name,
+            "class_name": class_name,
+            "section": section,
+            "timetable": timetable
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error("get_student_timetable failed: %s", e)
+        return jsonify({"error": "Failed to fetch timetable"}), 500
+
+
+# -------------------------------------------------------------------
+# TEACHER DASHBOARD → GET TIMETABLE FOR THE WEEK
+# -------------------------------------------------------------------
+@bp.route("/teacher/<int:teacher_id>/week", methods=["GET"])
+@jwt_required()
+def get_teacher_timetable(teacher_id):
+    """
+    Get timetable for a teacher for the entire week.
+    Returns all classes taught by this teacher, sorted by day and time.
+    
+    GET /api/timetable/teacher/{teacher_id}/week
+    
+    Returns: {
+        "teacher_name": "Ratan",
+        "timetable": [
+            {
+                "day": "Monday",
+                "class_name": "10",
+                "section": "A",
+                "subject": "Math",
+                "start_time": "09:00",
+                "end_time": "09:40"
+            },
+            ...
+        ]
+    }
+    """
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        # Get teacher name
+        cursor.execute(
+            "SELECT name FROM teachers WHERE id = ?",
+            (teacher_id,)
+        )
+        teacher = cursor.fetchone()
+        
+        if not teacher:
+            return jsonify({"error": "Teacher not found"}), 404
+        
+        teacher_name = teacher[0]
+        
+        # Get timetable for this teacher
+        # Match by teacher_name since the timetable stores teacher_name, not teacher_id
+        cursor.execute(
+            """SELECT id, day, class_name, section, subject, start_time, end_time
+               FROM timetable 
+               WHERE teacher_name = ?
+               ORDER BY CASE 
+                   WHEN day='Monday' THEN 1
+                   WHEN day='Tuesday' THEN 2
+                   WHEN day='Wednesday' THEN 3
+                   WHEN day='Thursday' THEN 4
+                   WHEN day='Friday' THEN 5
+                   WHEN day='Saturday' THEN 6
+                   WHEN day='Sunday' THEN 7
+               END, start_time""",
+            (teacher_name,)
+        )
+        
+        rows = cursor.fetchall()
+        
+        timetable = [
+            {
+                "id": r[0],
+                "day": r[1],
+                "class_name": r[2],
+                "section": r[3],
+                "subject": r[4],
+                "start_time": r[5],
+                "end_time": r[6]
+            }
+            for r in rows
+        ]
+        
+        return jsonify({
+            "teacher_name": teacher_name,
+            "timetable": timetable
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error("get_teacher_timetable failed: %s", e)
+        return jsonify({"error": "Failed to fetch timetable"}), 500

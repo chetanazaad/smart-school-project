@@ -65,6 +65,7 @@ def safe_import_route(primary, fallback, obj):
 auth_bp = safe_import_route("smart_school_backend.routes.auth", "routes.auth", "bp")
 students_bp = safe_import_route("smart_school_backend.routes.students", "routes.students", "bp")
 teachers_bp = safe_import_route("smart_school_backend.routes.teachers", "routes.teachers", "bp")
+parents_bp = safe_import_route("smart_school_backend.routes.parents", "routes.parents", "bp")
 
 attendance_bp = safe_import_route("smart_school_backend.routes.attendance", "routes.attendance", "bp")
 attendance_view_bp = safe_import_route("smart_school_backend.routes.attendance", "routes.attendance", "attendance_view_bp")
@@ -141,6 +142,7 @@ app.register_blueprint(auth_bp, url_prefix="/api/auth")
 
 app.register_blueprint(students_bp, url_prefix="/api/students")
 app.register_blueprint(teachers_bp, url_prefix="/api/teachers")
+app.register_blueprint(parents_bp, url_prefix="/api/parents")
 
 app.register_blueprint(attendance_bp, url_prefix="/api/attendance")
 app.register_blueprint(attendance_view_bp, url_prefix="/api/attendance-view")
@@ -189,7 +191,31 @@ def get_me():
 app.teardown_appcontext(close_db)
 
 # ============================================================
-# 16. RUN SERVER
+# 16. GLOBAL ERROR HANDLERS
+# ============================================================
+@app.errorhandler(Exception)
+def handle_error(error):
+    """Catch all unhandled errors"""
+    import traceback
+    print(f"❌ ERROR: {str(error)}")
+    print(traceback.format_exc())
+    return {
+        "error": "Internal server error",
+        "message": str(error)
+    }, 500
+
+@app.errorhandler(404)
+def handle_404(error):
+    """Handle route not found"""
+    return {
+        "error": "Route not found",
+        "message": str(error)
+    }, 404
+
+# ============================================================
+# 17. RUN SERVER
 # ============================================================
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Use debug=False in production, True for development
+    # Set use_reloader=False to prevent constant restarts
+    app.run(debug=False, use_reloader=False, host="127.0.0.1", port=5000)
