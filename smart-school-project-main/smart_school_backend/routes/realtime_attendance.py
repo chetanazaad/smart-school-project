@@ -16,6 +16,7 @@ from datetime import datetime, date
 from io import BytesIO
 import base64
 import json
+import logging
 
 import numpy as np
 from PIL import Image
@@ -27,6 +28,7 @@ except ImportError:
     from utils.db import get_db
 
 bp = Blueprint("realtime_attendance", __name__)
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------
@@ -65,9 +67,15 @@ def process_frame_for_faces(image_data: str):
             )
         )
 
-        # Detect face locations & encodings
-        face_locations = face_recognition.face_locations(small_image)
-        face_encodings = face_recognition.face_encodings(small_image, face_locations)
+        try:
+            from smart_school_backend.utils.lock import face_lock
+        except ImportError:
+            from utils.lock import face_lock
+
+        with face_lock:
+            # Detect face locations & encodings
+            face_locations = face_recognition.face_locations(small_image)
+            face_encodings = face_recognition.face_encodings(small_image, face_locations)
 
         # Scale boxes back to original size
         scaled_locations = []
@@ -106,13 +114,12 @@ def get_all_active_face_embeddings():
             SELECT fe.id, fe.student_id, fe.embedding, s.name, 'student' as type
             FROM face_embeddings fe
             JOIN students s ON fe.student_id = s.id
-            WHERE fe.is_active = 1
             """
         )
 
         embeddings = []
         for row in c.fetchall():
-            embedding_data = json.loads(row["embedding"])
+            embedding_data = np.frombuffer(row["embedding"], dtype=np.float32).tolist()
             embeddings.append(
                 {
                     "id": row["id"],
@@ -125,7 +132,7 @@ def get_all_active_face_embeddings():
 
         return embeddings
     except Exception as e:
-        print(f"[REALTIME] Error getting embeddings: {e}")
+        logger.error(f"Error getting embeddings: {type(e).__name__}")
         return []
 
 
@@ -139,23 +146,29 @@ def find_matching_face(captured_embedding, all_embeddings, tolerance=0.52):
         best_match = None
         best_distance = float("inf")
 
-        for emb in all_embeddings:
-            stored_np = np.array(emb["embedding"])
-            distance = face_recognition.face_distance([stored_np], captured_np)[0]
+        try:
+            from smart_school_backend.utils.lock import face_lock
+        except ImportError:
+            from utils.lock import face_lock
 
-            if distance < best_distance and distance <= tolerance:
-                best_distance = distance
-                best_match = {
-                    "name": emb["name"],
-                    "entity_id": emb["entity_id"],
-                    "type": emb["type"],
-                    "distance": float(distance),
-                    "confidence": float(1 - distance),
-                }
+        with face_lock:
+            for emb in all_embeddings:
+                stored_np = np.array(emb["embedding"])
+                distance = face_recognition.face_distance([stored_np], captured_np)[0]
+
+                if distance < best_distance and distance <= tolerance:
+                    best_distance = distance
+                    best_match = {
+                        "name": emb["name"],
+                        "entity_id": emb["entity_id"],
+                        "type": emb["type"],
+                        "distance": float(distance),
+                        "confidence": float(1 - distance),
+                    }
 
         return best_match
     except Exception as e:
-        print(f"[REALTIME] Error finding match: {e}")
+        logger.error(f"Error finding match: {type(e).__name__}")
         return None
 
 
@@ -195,7 +208,7 @@ def mark_attendance_record(student_id: int, status: str = "present") -> bool:
         conn.commit()
         return True
     except Exception as e:
-        print(f"[REALTIME] Error marking attendance: {e}")
+        logger.error(f"Error marking attendance: {type(e).__name__}")
         return False
 
 
@@ -296,7 +309,7 @@ def process_frame():
         ), 200
 
     except Exception as e:
-        print("[REALTIME] process_frame error:", e)
+        logger.error(f"process_frame error: {type(e).__name__}")
         return jsonify({"error": str(e)}), 500
 
 

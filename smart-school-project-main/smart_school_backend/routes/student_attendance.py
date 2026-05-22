@@ -13,38 +13,31 @@ except ImportError:
 student_attendance_bp = Blueprint("student_attendance", __name__)
 
 
-# -------------------------------------------------------------------
-# RECORD ATTENDANCE FOR A STUDENT
-# -------------------------------------------------------------------
-@student_attendance_bp.route("/mark", methods=["POST"])
-def mark_student_attendance():
-    data = request.get_json() or {}
-    student_id = data.get("student_id")
-    status = data.get("status", "present")
-    
+def _mark_student_attendance_helper(student_id, status="present"):
+    """Helper function to mark student attendance. Can be called from other modules."""
     now = datetime.now()
     date = now.strftime("%Y-%m-%d")
     marked_at_ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    if not student_id:
-        return jsonify({"error": "student_id is required"}), 400
-
     db = get_db()
     cur = db.cursor()
 
-    # If class_name not provided, try to fetch from students table
     try:
         cur.execute("SELECT class_name FROM students WHERE id = ?", (student_id,))
         row = cur.fetchone()
-        class_name = row[0] if row and row[0] else None
-    except Exception:
-        class_name = None
-
-    if not class_name:
-        return jsonify({"error": "class_name for student not found"}), 400
+        if not row or not row["class_name"]:
+            current_app.logger.error(
+                f"Could not mark attendance for student_id {student_id}: class_name not found."
+            )
+            return False, "class_name for student not found"
+        class_name = row["class_name"]
+    except Exception as e:
+        current_app.logger.error(
+            f"DB error when fetching class_name for student_id {student_id}: {e}"
+        )
+        return False, "Database error fetching class name"
 
     try:
-        # Insert or update attendance (include class_name and marked_at)
         cur.execute(
             """
             INSERT INTO student_attendance (student_id, class_name, date, status, marked_at)
@@ -55,12 +48,34 @@ def mark_student_attendance():
             (student_id, class_name, date, status, marked_at_ts),
         )
         db.commit()
-
+        current_app.logger.info(
+            f"Successfully marked attendance for student_id {student_id} with status '{status}'"
+        )
+        return True, "Attendance saved"
     except Exception as e:
-        current_app.logger.error("mark_student_attendance error: %s", e)
-        return jsonify({"error": "Failed to save attendance"}), 500
+        current_app.logger.error(f"mark_student_attendance_helper error: {e}")
+        db.rollback()
+        return False, "Failed to save attendance"
 
-    return jsonify({"message": "Attendance saved"}), 200
+
+# -------------------------------------------------------------------
+# RECORD ATTENDANCE FOR A STUDENT
+# -------------------------------------------------------------------
+@student_attendance_bp.route("/mark", methods=["POST"])
+def mark_student_attendance():
+    data = request.get_json() or {}
+    student_id = data.get("student_id")
+    status = data.get("status", "present")
+
+    if not student_id:
+        return jsonify({"error": "student_id is required"}), 400
+
+    success, message = _mark_student_attendance_helper(student_id, status)
+
+    if success:
+        return jsonify({"message": message}), 200
+    else:
+        return jsonify({"error": message}), 500
 
 
 # -------------------------------------------------------------------
@@ -75,7 +90,7 @@ def get_student_attendance(student_id):
     try:
         cur.execute(
             """
-            SELECT date, status
+            SELECT date, status, marked_at
             FROM student_attendance
             WHERE student_id=?
             ORDER BY date DESC
@@ -85,13 +100,19 @@ def get_student_attendance(student_id):
         rows = cur.fetchall()
     except Exception as e:
         current_app.logger.error("get_student_attendance error: %s", e)
-        return jsonify({"attendance": []}), 200
+        return jsonify({"attendance": [], "records": []}), 200
 
-    attendance_list = [
-        {"date": row[0], "status": row[1]} for row in rows
-    ]
+    attendance_list = []
+    for row in rows:
+        marked_at = row[2] or ""
+        time_part = marked_at.split("T")[1].split(".")[0] if "T" in marked_at else (marked_at.split(" ")[1] if (marked_at and len(marked_at.split(" "))>1) else "")
+        attendance_list.append({
+            "date": row[0],
+            "status": row[1],
+            "time": time_part
+        })
 
-    return jsonify({"attendance": attendance_list}), 200
+    return jsonify({"attendance": attendance_list, "records": attendance_list}), 200
 
 
 # -------------------------------------------------------------------
@@ -193,7 +214,7 @@ def student_logs(student_id):
     try:
         cur.execute(
             """
-            SELECT date, status
+            SELECT date, status, marked_at
             FROM student_attendance
             WHERE student_id=?
             ORDER BY date DESC
@@ -204,7 +225,9 @@ def student_logs(student_id):
         rows = cur.fetchall()
 
         for row in rows:
-            logs.append({"date": row[0], "status": row[1]})
+            marked_at = row[2] or ""
+            time_part = marked_at.split("T")[1].split(".")[0] if "T" in marked_at else (marked_at.split(" ")[1] if (marked_at and len(marked_at.split(" "))>1) else "")
+            logs.append({"date": row[0], "status": row[1], "time": time_part})
 
     except Exception as e:
         current_app.logger.warning("student_logs failed: %s", e)
@@ -256,3 +279,102 @@ def student_attendance_overview():
         "absent": absent_count,
         "percentage": percentage
     }), 200
+
+
+# -------------------------------------------------------------------
+# ADMIN DASHBOARD → GET ATTENDANCE BY DATE AND CLASS
+# -------------------------------------------------------------------
+@student_attendance_bp.route("/by-date", methods=["GET"])
+@jwt_required()
+def get_attendance_by_date():
+    """
+    Get attendance for a specific date and class.
+    GET /api/student-attendance/by-date?date=YYYY-MM-DD&class_name=ClassName
+    """
+    date_str = request.args.get("date")
+    class_name = request.args.get("class_name")
+    
+    if not date_str or not class_name:
+        return jsonify({"error": "date and class_name are required"}), 400
+        
+    db = get_db()
+    cur = db.cursor()
+    
+    try:
+        cur.execute(
+            """
+            SELECT student_id, status 
+            FROM student_attendance 
+            WHERE date = ? AND class_name = ?
+            """, 
+            (date_str, class_name)
+        )
+        rows = cur.fetchall()
+        attendance = [{"student_id": row[0], "status": row[1]} for row in rows]
+        
+        return jsonify({"attendance": attendance}), 200
+    except Exception as e:
+        current_app.logger.error("get_attendance_by_date failed: %s", e)
+        return jsonify({"error": "Failed to fetch attendance"}), 500
+
+
+# -------------------------------------------------------------------
+# ADMIN DASHBOARD → BULK MARK ATTENDANCE
+# -------------------------------------------------------------------
+@student_attendance_bp.route("/bulk-mark", methods=["POST"])
+@jwt_required()
+def bulk_mark_attendance():
+    """
+    Mark attendance for multiple students at once.
+    POST /api/student-attendance/bulk-mark
+    Payload: {
+        "attendance": [
+            {"student_id": 1, "class_name": "Class 1", "date": "YYYY-MM-DD", "status": "present", "notes": ""},
+            ...
+        ]
+    }
+    """
+    data = request.get_json() or {}
+    attendance_list = data.get("attendance", [])
+    
+    if not attendance_list:
+        return jsonify({"error": "attendance list is required"}), 400
+        
+    db = get_db()
+    cur = db.cursor()
+    success_count = 0
+    failed_count = 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        for record in attendance_list:
+            student_id = record.get("student_id")
+            class_name = record.get("class_name")
+            date_str = record.get("date")
+            status = record.get("status", "absent")
+            notes = record.get("notes")
+            
+            if not all([student_id, class_name, date_str]):
+                failed_count += 1
+                continue
+                
+            cur.execute(
+                """
+                INSERT INTO student_attendance (student_id, class_name, date, status, marked_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(student_id, date)
+                DO UPDATE SET status=excluded.status, marked_at=excluded.marked_at, notes=excluded.notes
+                """,
+                (student_id, class_name, date_str, status, now, notes)
+            )
+            success_count += 1
+            
+        db.commit()
+        return jsonify({
+            "message": "Bulk attendance processed",
+            "results": {"success": success_count, "failed": failed_count}
+        }), 200
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error("bulk_mark_attendance failed: %s", e)
+        return jsonify({"error": "Failed to process bulk attendance"}), 500

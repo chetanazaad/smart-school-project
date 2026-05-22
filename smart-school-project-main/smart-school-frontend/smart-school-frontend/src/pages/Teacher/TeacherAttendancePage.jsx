@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
+import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 
 export default function TeacherAttendancePage() {
@@ -9,11 +9,12 @@ export default function TeacherAttendancePage() {
   const fetchData = async () => {
     if (!user?.id) return;
 
-    const res = await axios.get(
-      `http://127.0.0.1:5000/api/teacher-attendance/get-attendance/${user.id}`
-    );
-
-    setRecords(res.data.records);
+    try {
+      const res = await api.get('/teacher-attendance/records');
+      setRecords(res.data);
+    } catch (err) {
+      console.error("Failed to fetch teacher attendance:", err);
+    }
   };
 
   useEffect(() => {
@@ -22,25 +23,29 @@ export default function TeacherAttendancePage() {
 
   return (
     <div className="p-6 bg-white shadow rounded">
-      <h2 className="text-2xl font-bold mb-4">My Students Attendance</h2>
+      <h2 className="text-2xl font-bold mb-4">My Attendance</h2>
 
       <table className="w-full border text-left">
         <thead className="bg-gray-100">
           <tr>
-            <th className="p-2 border">Student Name</th>
             <th className="p-2 border">Date</th>
             <th className="p-2 border">Time</th>
+            <th className="p-2 border">Status</th>
           </tr>
         </thead>
 
         <tbody>
-          {records.map((r) => (
-            <tr>
-              <td className="p-2 border">{r.student_name}</td>
-              <td className="p-2 border">{r.date}</td>
-              <td className="p-2 border">{r.time}</td>
-            </tr>
-          ))}
+          {records.map((r, i) => {
+            const markedAt = r.marked_at || "";
+            const timePart = markedAt.includes(" ") ? markedAt.split(" ")[1] : markedAt;
+            return (
+              <tr key={i}>
+                <td className="p-2 border">{r.date}</td>
+                <td className="p-2 border">{timePart}</td>
+                <td className="p-2 border capitalize">{r.status}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

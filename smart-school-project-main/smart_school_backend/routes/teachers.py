@@ -4,25 +4,22 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 import sqlite3
 import os
+import logging
 from flask import current_app
-from models.user import create_user
+try:
+    from utils.db import get_db
+    from models.user import create_user
+except ImportError:
+    from smart_school_backend.utils.db import get_db
+    from smart_school_backend.models.user import create_user
 
 bp = Blueprint("teachers", __name__)
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------
 # DB helper
 # ----------------------------------------------------------
-def get_db():
-    try:
-        from smart_school_backend.utils.db import get_db as gdb
-        return gdb()
-    except Exception:
-        db_path = os.path.join(current_app.root_path, "..", "database", "smart_school.db")
-        db_path = os.path.abspath(db_path)
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+# Using get_db from smart_school_backend.utils.db
 
 
 # ----------------------------------------------------------
@@ -53,7 +50,7 @@ def get_all_teachers():
         return jsonify({"teachers": teachers}), 200
 
     except Exception as e:
-        print("ERROR get_all_teachers:", e)
+        logger.error(f"Error fetching teachers: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch teachers"}), 500
 
 
@@ -73,7 +70,7 @@ def teacher_count():
         return jsonify({"count": row["total"]}), 200
 
     except Exception as e:
-        print("ERROR teacher_count:", e)
+        logger.error(f"Error getting teacher count: {type(e).__name__}")
         return jsonify({"count": 0}), 200
 
 
@@ -86,33 +83,26 @@ def teacher_count():
 def generate_teacher_id():
     """Generate a unique teacher ID with retry mechanism"""
     try:
-        import random
-        import time
-        
         db = get_db()
         cur = db.cursor()
         
-        # Try up to 10 times to generate unique ID
-        max_attempts = 10
-        for attempt in range(max_attempts):
-            n = random.randint(1000, 9999)
-            new_id = f"T{n}"
-            
-            # Check if ID exists
-            cur.execute("SELECT id FROM teachers WHERE id_code = ?", (new_id,))
-            if not cur.fetchone():
-                print(f"[ID_GEN] Generated unique ID: {new_id} (attempt {attempt + 1})")
-                return jsonify({"id_code": new_id}), 200
-            
-            # If collision, sleep briefly then retry
-            if attempt < max_attempts - 1:
-                time.sleep(0.01 * (attempt + 1))
+        cur.execute("SELECT id_code FROM teachers WHERE id_code LIKE 'T%'")
+        rows = cur.fetchall()
         
-        # If we get here, couldn't generate unique ID
-        print(f"[ID_GEN] FAILED to generate unique ID after {max_attempts} attempts")
-        return jsonify({"error": "Could not generate unique teacher ID. Too many collisions."}), 500
+        max_num = 0
+        for row in rows:
+            try:
+                num = int(row["id_code"][1:])
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                pass
+                
+        new_id = f"T{max_num + 1:03d}"  # Format: T001, T002, etc.
+        return jsonify({"id_code": new_id}), 200
+
     except Exception as e:
-        print("ERROR generate_teacher_id:", e)
+        logger.error(f"Error generating teacher ID: {type(e).__name__}")
         return jsonify({"error": "Failed to generate ID"}), 500
 
 
@@ -134,8 +124,6 @@ def create_teacher():
         assigned_class = data.get("assigned_class")
         assigned_section = data.get("assigned_section")
 
-        print(f"[CREATE_TEACHER] Attempt: name={name}, email={email}, id_code={id_code}")
-
         if not name or not email:
             return jsonify({"error": "name and email required"}), 400
 
@@ -146,18 +134,21 @@ def create_teacher():
         db = get_db()
         cur = db.cursor()
         
+        # FORCE CLEANUP: If there is a user account but NO profile, delete it immediately.
+        cur.execute("SELECT id FROM users WHERE email = ?", (email,))
+        if cur.fetchone():
+            cur.execute("SELECT id FROM teachers WHERE email = ?", (email,))
+            if not cur.fetchone():
+                cur.execute("SELECT id FROM students WHERE email = ?", (email,))
+                if not cur.fetchone():
+                    logger.warning(f"Forced cleanup of orphan user: {email}")
+                    cur.execute("DELETE FROM users WHERE email = ?", (email,))
+                    db.commit()
+
         # Check if teacher with this email already exists
         cur.execute("SELECT id FROM teachers WHERE email = ?", (email,))
         if cur.fetchone():
-            print(f"[CREATE_TEACHER] ERROR: Teacher with email {email} already exists")
-            return jsonify({"error": "Teacher with this email already exists"}), 409
-        
-        # Check if user with this email already exists (if password provided)
-        if password:
-            cur.execute("SELECT id FROM users WHERE email = ?", (email,))
-            if cur.fetchone():
-                print(f"[CREATE_TEACHER] ERROR: User with email {email} already exists")
-                return jsonify({"error": "User account with this email already exists"}), 409
+            return jsonify({"error": "Teacher with this email already exists in the system."}), 409
         
         # Create teacher record
         if id_code:
@@ -180,7 +171,7 @@ def create_teacher():
                 return jsonify({"message": "Teacher created with login credentials", "id": teacher_id, "user_id": user_id, "is_class_teacher": bool(is_class_teacher)}), 201
             except Exception as user_err:
                 # Teacher created but user creation failed - rollback teacher creation
-                print(f"ERROR: User creation failed after teacher created: {user_err}")
+                logger.error(f"User creation failed after teacher created: {type(user_err).__name__}")
                 cur.execute("DELETE FROM teachers WHERE id = ?", (teacher_id,))
                 db.commit()
                 return jsonify({"error": "Failed to create user account. Teacher creation rolled back."}), 500
@@ -188,7 +179,7 @@ def create_teacher():
             return jsonify({"message": "Teacher created", "id": teacher_id, "is_class_teacher": bool(is_class_teacher)}), 201
             
     except Exception as e:
-        print("ERROR create_teacher:", e)
+        logger.error(f"Error creating teacher: {type(e).__name__}")
         return jsonify({"error": "Failed to create teacher"}), 500
 
 
@@ -211,7 +202,7 @@ def get_teacher(teacher_id):
         
         return jsonify({"teacher": teacher_data}), 200
     except Exception as e:
-        print("ERROR get_teacher:", e)
+        logger.error(f"Error getting teacher: {type(e).__name__}")
         return jsonify({"error": "Failed to load teacher"}), 500
 
 
@@ -230,10 +221,16 @@ def update_teacher(teacher_id):
         is_class_teacher = data.get("is_class_teacher")
         assigned_class = data.get("assigned_class")
         assigned_section = data.get("assigned_section")
+        password = data.get("password")
 
         db = get_db()
         cur = db.cursor()
         
+        # Get old email to sync with users table
+        cur.execute("SELECT email FROM teachers WHERE id=?", (teacher_id,))
+        old_data = cur.fetchone()
+        old_email = old_data["email"] if old_data else None
+
         # If updating class teacher status and marking as true, require class/section
         if is_class_teacher and (not assigned_class or not assigned_section):
             return jsonify({"error": "Class and section required for class teachers"}), 400
@@ -270,11 +267,17 @@ def update_teacher(teacher_id):
         params.append(teacher_id)
         query = "UPDATE teachers SET " + ", ".join(update_fields) + " WHERE id=?"
         cur.execute(query, params)
+        
+        # Sync with users table
+        if old_email:
+            from models.user import update_user_profile
+            update_user_profile(old_email, name=name, new_email=email, password=password)
+
         db.commit()
         
         return jsonify({"message": "Teacher updated"}), 200
     except Exception as e:
-        print("ERROR update_teacher:", e)
+        logger.error(f"Error updating teacher: {type(e).__name__} - {e}")
         return jsonify({"error": "Failed to update teacher"}), 500
 
 
@@ -287,12 +290,33 @@ def delete_teacher(teacher_id):
     try:
         db = get_db()
         cur = db.cursor()
+        
+        # Get email for cleanup
+        cur.execute("SELECT email FROM teachers WHERE id=?", (teacher_id,))
+        teacher = cur.fetchone()
+        if not teacher:
+            return jsonify({"error": "Teacher not found"}), 404
+        
+        email = teacher["email"]
+
+        # Manually delete dependent records to handle databases without ON DELETE CASCADE
+        cur.execute("DELETE FROM teacher_attendance WHERE teacher_id=?", (teacher_id,))
+        cur.execute("DELETE FROM face_embeddings WHERE teacher_id=? AND role='teacher'", (teacher_id,))
+
         cur.execute("DELETE FROM teachers WHERE id=?", (teacher_id,))
-        cur.execute("DELETE FROM face_embeddings WHERE person_id=? AND role='teacher'", (teacher_id,))
+        # User cleanup
+        if email:
+            try:
+                from models.user import delete_user_by_email
+                delete_user_by_email(email)
+                logger.info(f"Successfully deleted associated user for email: {email}")
+            except Exception as user_err:
+                logger.warning(f"Failed to delete teacher user account for {email}: {user_err}")
+
         db.commit()
-        return jsonify({"message": "Teacher deleted"}), 200
+        return jsonify({"message": "Teacher and associated user account permanently deleted"}), 200
     except Exception as e:
-        print("ERROR delete_teacher:", e)
+        logger.error(f"Error deleting teacher: {type(e).__name__}")
         return jsonify({"error": "Failed to delete teacher"}), 500
 
 
@@ -381,7 +405,7 @@ def teacher_dashboard(teacher_id):
         }), 200
         
     except Exception as e:
-        print("ERROR teacher_dashboard:", e)
+        logger.error(f"Error fetching teacher dashboard: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch dashboard"}), 500
 
 
@@ -429,7 +453,7 @@ def get_enrolled_students(teacher_id):
         }), 200
         
     except Exception as e:
-        print("ERROR get_enrolled_students:", e)
+        logger.error(f"Error fetching enrolled students: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch students"}), 500
 
 
@@ -495,5 +519,5 @@ def get_teacher_attendance(teacher_id):
         }), 200
         
     except Exception as e:
-        print("ERROR get_teacher_attendance:", e)
+        logger.error(f"Error fetching teacher attendance: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch attendance info"}), 500

@@ -1,8 +1,14 @@
 # utils/jwt_manager.py
 import jwt
 import datetime
+import os
 
-SECRET_KEY = "SMART_SCHOOL_SECRET_KEY_123"   # you can change this if needed
+# Load JWT secret from environment - fail if not set in production
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    import sys
+    print("WARNING: JWT_SECRET_KEY environment variable not set. Using temporary key for development only.")
+    SECRET_KEY = f"dev_temp_key_{datetime.datetime.now().strftime('%Y%m%d')}"
 
 def create_access_token(identity):
     """

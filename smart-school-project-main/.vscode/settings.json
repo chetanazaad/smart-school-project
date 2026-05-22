@@ -1,5 +1,3 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": [],
-    "git.ignoreLimitWarning": true
+    "python.defaultInterpreterPath": "d:\\data_science_project\\smart-school-project-main\\smart_school_backend\\venv\\Scripts\\python.exe"
 }

@@ -1,5 +1,5 @@
 // src/pages/Admin/AddTeacher.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import API from "../../services/api";
 import { useNavigate } from "react-router-dom";
 import CameraCapture from "../../components/camera/CameraCapture";
@@ -17,16 +17,28 @@ export default function AddTeacher() {
     assigned_class: "",
     assigned_section: "",
   });
-  const [createdId, setCreatedId] = useState(null);
-  const [imageBase64, setImageBase64] = useState(null);
+  const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [enrollStatus, setEnrollStatus] = useState("");
+
+  const addImage = (b64) => {
+    if (images.length < 3) {
+      setImages([...images, b64]);
+    } else {
+      alert("Max 3 photos reached.");
+    }
+  };
+
+  const removeImage = (index) => {
+    setImages(images.filter((_, i) => i !== index));
+  };
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const generateTeacherId = async () => {
+  const generateTeacherId = useCallback(async () => {
     try {
       const res = await API.get("/teachers/generate-id");
       return res.data.id_code;
@@ -36,7 +48,7 @@ export default function AddTeacher() {
       const n = Math.floor(1000 + Math.random() * 9000);
       return `T${n}`;
     }
-  };
+  }, []);
 
   useEffect(() => {
     const initializeId = async () => {
@@ -46,8 +58,27 @@ export default function AddTeacher() {
       }
     };
     initializeId();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [form.id_code, generateTeacherId]);
+
+  // Validate password strength
+  const validatePassword = (password) => {
+    if (password.length < 8) {
+      return "Password must be at least 8 characters long";
+    }
+    if (!/[A-Z]/.test(password)) {
+      return "Password must contain at least one uppercase letter";
+    }
+    if (!/[a-z]/.test(password)) {
+      return "Password must contain at least one lowercase letter";
+    }
+    if (!/[0-9]/.test(password)) {
+      return "Password must contain at least one digit";
+    }
+    if (!/[!@#$%^&*(),.?\":{}|<>]/.test(password)) {
+      return "Password must contain at least one special character";
+    }
+    return null;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -59,8 +90,10 @@ export default function AddTeacher() {
       return;
     }
 
-    if (form.password.length < 6) {
-      setError("Password must be at least 6 characters");
+    // Password strength validation
+    const passwordError = validatePassword(form.password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
@@ -74,15 +107,16 @@ export default function AddTeacher() {
       return;
     }
 
-    if (!imageBase64) {
-      setError("Please enroll the teacher's face using the camera before submitting.");
+    if (images.length < 3) {
+      setError("Please enroll exactly 3 face photos from different angles (front, left, right).");
+      setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
       // 1) Create teacher record AND user account
-      const createRes = await API.post("/teachers", {
+      await API.post("/teachers", {
         id_code: form.id_code,
         name: form.name,
         email: form.email,
@@ -93,22 +127,22 @@ export default function AddTeacher() {
         assigned_section: form.is_class_teacher ? form.assigned_section : null,
       });
 
-      const teacherId = createRes.data?.id;
-      setCreatedId(teacherId || null);
+      // 2) Enroll multiple face images using EMAIL (Unique ID)
+      await API.post("/enrollment/enroll", {
+        role: "teacher",
+        user_id: form.email, // Use unique email as requested
+        images: images,
+        clear_existing: true
+      });
 
-      // 2) Enroll face
-      if (teacherId) {
-        await API.post("/face/enroll", {
-          role: "teacher",
-          user_id: teacherId,
-          image: imageBase64,
-        });
-      }
+      setEnrollStatus("Face(s) enrolled successfully");
 
       navigate("/admin/teachers");
+
     } catch (err) {
       console.error("Add teacher failed:", err);
       setError(err.response?.data?.error || "Enrollment failed. See console for details.");
+      setEnrollStatus("");
     } finally {
       setLoading(false);
     }
@@ -136,7 +170,7 @@ export default function AddTeacher() {
           />
           <button type="button" onClick={async () => {
             const newId = await generateTeacherId();
-            setForm(f => ({...f, id_code: newId}));
+            setForm(f => ({ ...f, id_code: newId }));
           }} className="px-3 py-2 bg-gray-200 rounded">New</button>
         </div>
 
@@ -211,7 +245,7 @@ export default function AddTeacher() {
 
         <div className="bg-blue-50 p-4 rounded border border-blue-200">
           <h3 className="font-semibold text-blue-900 mb-3">Login Credentials</h3>
-          
+
           <input
             name="password"
             type="password"
@@ -231,26 +265,41 @@ export default function AddTeacher() {
             className="border p-3 rounded w-full"
             required
           />
-          <p className="text-sm text-gray-600 mt-2">Password must be at least 6 characters</p>
+          <p className="text-sm text-gray-600 mt-2">
+            Password must be at least 8 characters with uppercase, lowercase, digit, and special character
+          </p>
         </div>
-
-        {createdId && (
-          <input
-            name="id"
-            placeholder="Created ID"
-            value={createdId}
-            readOnly
-            className="border p-3 rounded w-full bg-gray-100 mt-2"
-          />
-        )}
 
         <div>
-          <label className="block text-sm font-medium mb-2">Enroll Face (required)</label>
-          <CameraCapture onCapture={(b64) => setImageBase64(b64)} />
-          {imageBase64 && (
-            <img src={imageBase64} alt="captured" className="mt-3 w-48 h-auto rounded border" />
+          <label className="block text-sm font-medium mb-2">Enroll Face (3 angles recommended for max accuracy)</label>
+          <CameraCapture onCapture={addImage} />
+
+          <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
+            {images.map((img, idx) => (
+              <div key={idx} className="relative group">
+                <img src={img} alt={`captured-${idx}`} className="w-24 h-24 object-cover rounded border shadow-sm" />
+                <button
+                  type="button"
+                  onClick={() => removeImage(idx)}
+                  className="absolute -top-2 -right-2 bg-red-600 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-700 shadow-md"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {images.length === 0 && <p className="text-gray-400 text-sm italic">No photos captured yet.</p>}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Photos captured: {images.length}/3. Tip: Capture front, left, and right angles.
+          </p>
+          {images.length > 0 && !enrollStatus && (
+            <p className="text-sm text-yellow-700 mt-2">Faces captured — not yet enrolled</p>
+          )}
+          {enrollStatus && (
+            <p className="text-sm text-green-700 mt-2">{enrollStatus}</p>
           )}
         </div>
+
 
         <button
           type="submit"

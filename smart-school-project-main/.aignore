@@ -1,0 +1,10 @@
+# Ignore the nested venv folder
+**/venv/
+**/env/
+**/__pycache__/
+**/.git/
+**/node_modules/
+
+# Ignore specific large library files
+smart_school_backend/venv/
+

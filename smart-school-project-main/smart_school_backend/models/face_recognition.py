@@ -1,45 +1,65 @@
 import sqlite3
 import os
 import numpy as np
+import sys
 
 # =========================
 # DATABASE PATH RESOLUTION
 # =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "..", "database", "smart_school.db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, "database", "smart_school.db")
+
+# Fix sys.path for imports
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# Use the same get_db function from utils to avoid connection conflicts
+try:
+    from utils.db import get_db
+except ImportError:
+    from smart_school_backend.utils.db import get_db
 
 
 def get_connection():
     """
     Returns a new SQLite connection to smart_school.db
+    Uses check_same_thread=False to allow multi-threaded access
     """
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 # ========================================================
-# 1. CREATE face_embeddings TABLE  (Fixes your import bug)
+# 1. CREATE face_embeddings TABLE
 # ========================================================
 
 def create_face_embeddings_table():
     """
     Creates face_embeddings table if it does not exist.
-    This function MUST exist because app.py imports it.
+    This is now primarily for reference, as init_db.py is the source of truth.
     """
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS face_embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            person_id TEXT UNIQUE NOT NULL,
-            name TEXT,
-            email TEXT,
-            class_name TEXT,
-            section TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            embedding BLOB NOT NULL
-        )
+    CREATE TABLE IF NOT EXISTS face_embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role TEXT NOT NULL CHECK(role IN ('student', 'teacher')),
+        student_id INTEGER,
+        teacher_id INTEGER,
+        name TEXT,
+        email TEXT,
+        class_name TEXT,
+        section TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        embedding BLOB NOT NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
+        UNIQUE(role, student_id, teacher_id),
+        CHECK ((role = 'student' AND student_id IS NOT NULL AND teacher_id IS NULL) OR
+               (role = 'teacher' AND teacher_id IS NOT NULL AND student_id IS NULL))
+    )
     """)
 
     conn.commit()
@@ -51,27 +71,36 @@ def create_face_embeddings_table():
 # 2. STORE OR UPDATE FACE EMBEDDING
 # ========================================================
 
-def store_face_embedding(role, person_id, name, email, class_name, section, embedding):
+def store_face_embedding(role, person_id, name, email, class_name, section, embedding, clear_existing=False):
     """
-    Saves or updates face embeddings in DB.
-    The embedding comes as a NumPy array.
+    Saves face embeddings in DB.
+    If clear_existing is True, previous embeddings for this person are deleted.
     """
     conn = get_connection()
     cur = conn.cursor()
 
     embedding_blob = embedding.astype(np.float32).tobytes()
 
-    cur.execute("""
-        INSERT INTO face_embeddings (role, person_id, name, email, class_name, section, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(person_id)
-        DO UPDATE SET 
-            name = excluded.name,
-            email = excluded.email,
-            class_name = excluded.class_name,
-            section = excluded.section,
-            embedding = excluded.embedding
-    """, (role, person_id, name, email, class_name, section, embedding_blob))
+    if clear_existing:
+        if role == 'student':
+            cur.execute("DELETE FROM face_embeddings WHERE role = 'student' AND student_id = ?", (person_id,))
+        elif role == 'teacher':
+            cur.execute("DELETE FROM face_embeddings WHERE role = 'teacher' AND teacher_id = ?", (person_id,))
+
+    if role == 'student':
+        cur.execute("""
+            INSERT INTO face_embeddings (role, student_id, name, email, class_name, section, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (role, person_id, name, email, class_name, section, embedding_blob))
+    elif role == 'teacher':
+        cur.execute("""
+            INSERT INTO face_embeddings (role, teacher_id, name, email, class_name, section, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (role, person_id, name, email, class_name, section, embedding_blob))
+    else:
+        conn.close()
+        raise ValueError("Role must be either 'student' or 'teacher'")
+
 
     conn.commit()
     conn.close()
@@ -86,12 +115,10 @@ def load_all_embeddings():
     Loads all embeddings from DB and returns:
     [
         {
-            "role": "student",
-            "person_id": "ST10001",
+            "role": "student" or "teacher",
+            "person_id": ID,
             "name": "Cheta",
-            "email": "...",
-            "class_name": "...",
-            "section": "...",
+            ...
             "embedding": numpy.ndarray
         }
     ]
@@ -100,7 +127,7 @@ def load_all_embeddings():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT role, person_id, name, email, class_name, section, embedding
+        SELECT role, student_id, teacher_id, name, email, class_name, section, embedding
         FROM face_embeddings
     """)
 
@@ -108,8 +135,10 @@ def load_all_embeddings():
     conn.close()
 
     embeddings = []
-    for role, person_id, name, email, class_name, section, emb_blob in rows:
+    for role, student_id, teacher_id, name, email, class_name, section, emb_blob in rows:
         emb_array = np.frombuffer(emb_blob, dtype=np.float32)
+
+        person_id = student_id if role == 'student' else teacher_id
 
         embeddings.append({
             "role": role,

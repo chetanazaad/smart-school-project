@@ -1,13 +1,28 @@
 # create_admin.py
-import bcrypt
+import os
+import sys
+
+# ============================================================
+# FIX PYTHON PATHS
+# ============================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # smart_school_backend/
+ROOT_DIR = os.path.dirname(BASE_DIR)                    # project root
+
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from werkzeug.security import generate_password_hash
 from smart_school_backend.app import app
 from smart_school_backend.utils.db import get_db
-from smart_school_backend.database.init_db import initialize_database
+from smart_school_backend.database.init_db import init_db
 
 def create_admin():
-    print("Executing create_admin (v2)...")
+    print("Executing create_admin (v3 - fixed)...")
     with app.app_context():
-        initialize_database()  # ensure tables exist
+        init_db()  # ensure tables exist
         
         print("... getting db connection in create_admin.")
         conn = get_db()
@@ -16,15 +31,24 @@ def create_admin():
         name = "Super Admin"
         email = "admin@school.com"
         password = "admin123"
-        role = "Admin"
+        role = "admin"  # lowercase to match frontend
 
-        hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        hashed_pw = generate_password_hash(password)
 
         try:
             # Check if admin already exists
             cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
-            if cursor.fetchone():
-                print("ℹ️ Admin user already exists.")
+            existing = cursor.fetchone()
+            if existing:
+                print("INFO: Admin user already exists. Updating password and role...")
+                cursor.execute(
+                    "UPDATE users SET password = ?, role = ? WHERE email = ?",
+                    (hashed_pw, role, email)
+                )
+                conn.commit()
+                print("✅ Admin user updated successfully")
+                print("Login Email: admin@school.com")
+                print("Password: admin123")
                 return
 
             cursor.execute(

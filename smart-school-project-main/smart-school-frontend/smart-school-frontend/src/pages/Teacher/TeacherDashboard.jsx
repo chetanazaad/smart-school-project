@@ -1,6 +1,6 @@
 // src/pages/Teacher/TeacherDashboard.jsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import API from "../../services/api";
@@ -9,6 +9,7 @@ export default function TeacherDashboard() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
+  const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
     total_students: 0,
     today_present: 0,
@@ -18,42 +19,66 @@ export default function TeacherDashboard() {
   const [recent, setRecent] = useState([]);
 
   // Fetch Teacher Dashboard Stats
-  const loadStats = async () => {
+  const loadStats = useCallback(async () => {
     if (!user?.id) return;
 
     try {
-      const res1 = await API.get(`/teachers/${user.id}/student-count`);
-      const res2 = await API.get(`/attendance/teacher/${user.id}/today`);
-      const res3 = await API.get(`/timetable/teacher/${user.id}/today`);
+      // For class teachers, get enrolled students count
+      if (user.is_class_teacher) {
+        const res1 = await API.get(`/teachers/${user.id}/enrolled-students`);
+        const res2 = await API.get(`/attendance/teacher/${user.id}/today`);
+        const res3 = await API.get(`/timetable/teacher/${user.id}/today`);
 
-      setStats({
-        total_students: res1.data.count || 0,
-        today_present: res2.data.present || 0,
-        classes_today: res3.data.count || 0,
-      });
+        setStats({
+          total_students: res1.data.total_students || 0,
+          today_present: res2.data.present || 0,
+          classes_today: res3.data.count || 0,
+        });
+      } else {
+        // For regular teachers, show 0 students
+        const res2 = await API.get(`/attendance/teacher/${user.id}/today`);
+        const res3 = await API.get(`/timetable/teacher/${user.id}/today`);
+
+        setStats({
+          total_students: 0,
+          today_present: res2.data.present || 0,
+          classes_today: res3.data.count || 0,
+        });
+      }
     } catch (err) {
       console.error("Teacher stats error:", err);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [user]);
 
   // Fetch Latest Logs for Teacher
-  const loadRecent = async () => {
+  const loadRecent = useCallback(async () => {
     if (!user?.id) return;
 
     try {
       const res = await API.get(
         `/attendance-view/teacher/${user.id}?limit=5`
       );
-      setRecent(res.data.data || []);
+      // Backend returns data in 'data' or 'records'? Fixed backend to return both.
+      setRecent(res.data.data || res.data.records || []);
     } catch (err) {
       console.error("Teacher logs error:", err);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     loadStats();
     loadRecent();
-  }, [user, token]);
+  }, [loadStats, loadRecent]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6">
@@ -63,6 +88,7 @@ export default function TeacherDashboard() {
         <h1 className="text-2xl font-bold">Teacher Dashboard</h1>
         <button
           onClick={() => {
+            setLoading(true);
             loadStats();
             loadRecent();
           }}
@@ -81,7 +107,7 @@ export default function TeacherDashboard() {
 
       {/* Quick Actions */}
       <h2 className="text-xl font-semibold mb-2">Quick Actions</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${user?.is_class_teacher ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4 mb-6`}>
 
         <ActionButton
           label="Mark Attendance"
@@ -89,11 +115,21 @@ export default function TeacherDashboard() {
           color="blue"
         />
 
-        <ActionButton
-          label="Enroll Student"
-          onClick={() => navigate("/teacher/add-student")}
-          color="green"
-        />
+        {user?.is_class_teacher && (
+          <ActionButton
+            label="Enroll Student"
+            onClick={() => navigate("/teacher/add-student")}
+            color="green"
+          />
+        )}
+
+        {user?.is_class_teacher && (
+          <ActionButton
+            label="My Students"
+            onClick={() => navigate("/teacher/students")}
+            color="teal"
+          />
+        )}
 
         <ActionButton
           label="My Timetable"

@@ -41,6 +41,92 @@ def get_timetable(class_name, section):
 
 
 # ------------------------------
+# Get Current Class for Student (Substitute Video Feature)
+# ------------------------------
+@bp.route("/student/<int:student_id>/current-class", methods=["GET"])
+@jwt_required()
+def get_student_current_class(student_id):
+    db = get_db()
+    cursor = db.cursor()
+    now = datetime.now()
+    current_day = now.strftime("%A")
+    current_time_str = now.strftime("%H:%M")
+    
+    try:
+        # Get student's class and section
+        cursor.execute("SELECT class_name, section FROM students WHERE id = ?", (student_id,))
+        student = cursor.fetchone()
+        
+        if not student or not student["class_name"]:
+            return jsonify({"has_class": False, "message": "No class assigned to student"}), 200
+            
+        class_name = student["class_name"]
+        section = student["section"]
+        
+        # Check timetable for current class
+        cursor.execute(
+            """
+            SELECT subject, teacher_name, start_time, end_time
+            FROM timetable
+            WHERE class_name = ? AND section = ? AND day = ?
+            AND start_time <= ? AND end_time >= ?
+            """,
+            (class_name, section, current_day, current_time_str, current_time_str),
+        )
+        timetable_entry = cursor.fetchone()
+        
+        if not timetable_entry:
+            return jsonify({"has_class": False, "message": "No class scheduled at this time"}), 200
+            
+        teacher_name = timetable_entry["teacher_name"]
+        subject = timetable_entry["subject"]
+        
+        # Find teacher by name
+        cursor.execute("SELECT id FROM teachers WHERE name = ?", (teacher_name,))
+        teacher = cursor.fetchone()
+        
+        teacher_present = False
+        if teacher:
+            today_str = now.strftime("%Y-%m-%d")
+            cursor.execute(
+                "SELECT status FROM teacher_attendance WHERE teacher_id = ? AND date = ?",
+                (teacher["id"], today_str),
+            )
+            attendance = cursor.fetchone()
+            if attendance and attendance["status"] == "present":
+                teacher_present = True
+
+        SUBJECT_VIDEOS = {
+            "Math": "https://www.youtube.com/embed/gZaOd1V0_3w",
+            "Mathematics": "https://www.youtube.com/embed/gZaOd1V0_3w",
+            "Physics": "https://www.youtube.com/embed/b1t41Q3xRM8",
+            "Chemistry": "https://www.youtube.com/embed/7D51KSyvjBg",
+            "Biology": "https://www.youtube.com/embed/31n63L317l8",
+            "English": "https://www.youtube.com/embed/9a62O4PZg-U",
+            "History": "https://www.youtube.com/embed/yvD9T-Q1oT8",
+            "Geography": "https://www.youtube.com/embed/sSUnkC7bTsc",
+            "Computer Science": "https://www.youtube.com/embed/zojyEvNW_vI",
+            "Science": "https://www.youtube.com/embed/7D51KSyvjBg"
+        }
+        
+        video_url = SUBJECT_VIDEOS.get(subject, "https://www.youtube.com/embed/zojyEvNW_vI")
+        
+        return jsonify({
+            "has_class": True,
+            "subject": subject,
+            "teacher_name": teacher_name,
+            "teacher_present": teacher_present,
+            "start_time": timetable_entry["start_time"],
+            "end_time": timetable_entry["end_time"],
+            "video_url": video_url
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error("get_student_current_class failed: %s", e)
+        return jsonify({"has_class": False, "error": "Failed to fetch current class"}), 500
+
+
+# ------------------------------
 # Add Timetable Entry (Admin Dashboard)
 # ------------------------------
 @bp.route("/add", methods=["POST"])
@@ -130,10 +216,19 @@ def teacher_timetable_today(teacher_id):
     cursor = db.cursor()
 
     try:
+        # Get teacher name
+        cursor.execute("SELECT name FROM teachers WHERE id = ?", (teacher_id,))
+        teacher = cursor.fetchone()
+        
+        if not teacher:
+            return jsonify({"count": 0}), 200
+            
+        teacher_name = teacher[0]
+
         # Count classes for this teacher today
         cursor.execute(
-            "SELECT COUNT(*) FROM timetable WHERE day = ?",
-            (today_name,),
+            "SELECT COUNT(*) FROM timetable WHERE day = ? AND teacher_name = ?",
+            (today_name, teacher_name),
         )
         count = cursor.fetchone()[0] or 0
     except Exception as e:
@@ -162,10 +257,30 @@ def teacher_attendance_today(teacher_id):
     cursor = db.cursor()
 
     try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM student_attendance WHERE date = ? AND status = 'present'",
-            (today,),
-        )
+        # Get teacher class info
+        cursor.execute("SELECT is_class_teacher, assigned_class, assigned_section FROM teachers WHERE id=?", (teacher_id,))
+        teacher = cursor.fetchone()
+        
+        if not teacher:
+            return jsonify({"present": 0}), 200
+
+        if teacher["is_class_teacher"] and teacher["assigned_class"]:
+            # Count only their students
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM student_attendance sa
+                JOIN students s ON s.id = sa.student_id
+                WHERE sa.date = ? AND sa.status = 'present'
+                AND s.class_name = ? AND s.section = ?
+                """,
+                (today, teacher["assigned_class"], teacher["assigned_section"]),
+            )
+        else:
+            # Regular teacher or missing class info
+            cursor.execute(
+                "SELECT COUNT(*) FROM student_attendance WHERE date = ? AND status = 'present'",
+                (today,),
+            )
         present = cursor.fetchone()[0] or 0
     except Exception as e:
         current_app.logger.warning("teacher_attendance_today failed: %s", e)

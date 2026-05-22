@@ -15,10 +15,17 @@ from datetime import datetime, date
 from io import BytesIO
 import base64
 import json
+import logging
 
 import numpy as np
 from PIL import Image
-import face_recognition
+try:
+    from models.face_recognition import load_all_embeddings
+except ImportError:
+    from smart_school_backend.models.face_recognition import load_all_embeddings
+
+# Lazy import: face_engine imported in functions to avoid TensorFlow at startup
+# from smart_school_backend.face_engine.encoder import generate_embedding
 
 # DB helper
 try:
@@ -27,6 +34,7 @@ except ImportError:
     from utils.db import get_db
 
 bp = Blueprint("automatic_attendance", __name__)
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------
@@ -47,13 +55,26 @@ def decode_base64_image(image_data: str) -> np.ndarray:
 
 
 def extract_single_embedding(image_array: np.ndarray):
-    """Return a single face embedding, or raise ValueError."""
-    encodings = face_recognition.face_encodings(image_array)
-    if len(encodings) == 0:
-        raise ValueError("No face detected in image")
-    if len(encodings) > 1:
-        raise ValueError("Multiple faces detected. Please ensure only one person is in the frame")
-    return encodings[0]
+    """Return a single face embedding using the DeepFace encoder, or raise ValueError."""
+    # Convert numpy RGB image to base64 data URL expected by encoder
+    try:
+        from io import BytesIO
+        import base64
+        # Lazy import to avoid TensorFlow dependency at startup
+        from smart_school_backend.face_engine.encoder import generate_embedding
+
+        pil = Image.fromarray(image_array.astype('uint8'), 'RGB')
+        buf = BytesIO()
+        pil.save(buf, format='JPEG')
+        b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+        emb = generate_embedding(b64)
+        if emb is None:
+            raise ValueError("No face detected in image")
+        return emb
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Embedding generation failed: {e}")
 
 
 def check_already_marked(entity_id: int, entity_type: str) -> bool:
@@ -82,65 +103,57 @@ def check_already_marked(entity_id: int, entity_type: str) -> bool:
 # Matching helpers
 # ---------------------------------------
 
-def _find_match_from_query(captured_embedding, rows, id_field_name: str, tolerance: float):
+def _find_match_from_embeddings(captured_embedding: np.ndarray, stored_list: list, tolerance: float):
     """
-    Generic matcher: captured_embedding (list/np) vs DB rows
-    each row must contain: ['id', id_field_name, 'embedding', 'name', 'email']
+    Match a captured embedding (numpy array) against stored embeddings list.
+    `stored_list` is a list of dicts from `load_all_embeddings()`.
+    Returns best match dict or None.
     """
-    if not rows:
+    if not stored_list:
         return None
 
-    captured_np = np.array(captured_embedding)
-    best_match = None
-    best_confidence = 0.0
+    # Normalize captured
+    cap = np.array(captured_embedding, dtype=np.float32)
+    cap_norm = cap / np.linalg.norm(cap)
 
-    for row in rows:
-        stored_embedding = json.loads(row["embedding"])
-        stored_np = np.array(stored_embedding)
+    best = None
+    best_dist = float('inf')
 
-        distance = face_recognition.face_distance([stored_np], captured_np)[0]
-        confidence = 1.0 - float(distance)
-
-        if distance <= tolerance and confidence > best_confidence:
-            best_confidence = confidence
-            best_match = {
-                "embedding_id": row["id"],
-                id_field_name: row[id_field_name],
-                "name": row["name"],
-                "email": row["email"],
-                "distance": float(distance),
-                "confidence": confidence,
+    for entry in stored_list:
+        db_emb = np.array(entry['embedding'], dtype=np.float32)
+        if db_emb.size == 0:
+            continue
+        db_norm = db_emb / np.linalg.norm(db_emb)
+        similarity = np.dot(cap_norm, db_norm)
+        dist = 1.0 - float(similarity)
+        if dist < best_dist and dist <= tolerance:
+            best_dist = dist
+            best = {
+                'person_id': entry.get('person_id'),
+                'role': entry.get('role'),
+                'name': entry.get('name'),
+                'email': entry.get('email'),
+                'class_name': entry.get('class_name'),
+                'section': entry.get('section'),
+                'distance': float(dist),
             }
 
-    return best_match
+    return best
 
 
-def find_matching_student(captured_embedding, tolerance=0.5):
-    conn = get_db()
-    rows = conn.execute(
-        """
-        SELECT fe.id, fe.student_id, fe.embedding, s.name, s.email
-        FROM face_embeddings fe
-        JOIN students s ON fe.student_id = s.id
-        WHERE fe.is_active = 1
-        """
-    ).fetchall()
-
-    return _find_match_from_query(captured_embedding, rows, "student_id", tolerance)
+def find_matching_student(captured_embedding, tolerance=0.68, class_name=None, section=None):
+    # Load all embeddings and filter by role=student and optionally class/section
+    all_emb = load_all_embeddings()
+    students = [e for e in all_emb if e.get('role') == 'student']
+    if class_name:
+        students = [s for s in students if s.get('class_name') == class_name and s.get('section') == section]
+    return _find_match_from_embeddings(captured_embedding, students, tolerance)
 
 
-def find_matching_teacher(captured_embedding, tolerance=0.5):
-    conn = get_db()
-    rows = conn.execute(
-        """
-        SELECT fe.id, fe.teacher_id, fe.embedding, t.name, t.email
-        FROM face_embeddings fe
-        JOIN teachers t ON fe.teacher_id = t.id
-        WHERE fe.is_active = 1
-        """
-    ).fetchall()
-
-    return _find_match_from_query(captured_embedding, rows, "teacher_id", tolerance)
+def find_matching_teacher(captured_embedding, tolerance=0.68):
+    all_emb = load_all_embeddings()
+    teachers = [e for e in all_emb if e.get('role') == 'teacher']
+    return _find_match_from_embeddings(captured_embedding, teachers, tolerance)
 
 
 # ---------------------------------------
@@ -180,7 +193,20 @@ def mark_student_attendance():
                 "error": "Face not recognized. Please try again or check camera.",
             }), 200
 
-        student_id = match["student_id"]
+        # `match['person_id']` may be an id_code or numeric id stored as string.
+        person_id_str = str(match.get("person_id"))
+        # Try to resolve to numeric student id in DB
+        cur = get_db().cursor()
+        student = None
+        if person_id_str.isdigit():
+            student = cur.execute("SELECT id, name, class_name FROM students WHERE id = ?", (int(person_id_str),)).fetchone()
+        if not student:
+            student = cur.execute("SELECT id, name, class_name FROM students WHERE id_code = ?", (person_id_str,)).fetchone()
+        if not student:
+            return jsonify({"success": False, "error": "Matched person not found in students table"}), 200
+        student_id = student['id']
+        student_class = student.get('class_name', 'Unknown')  # Get class_name for attendance
+        confidence = 1.0 - float(match.get('distance', 1.0))
         if check_already_marked(student_id, "student"):
             return jsonify({
                 "success": False,
@@ -197,10 +223,10 @@ def mark_student_attendance():
         try:
             conn.execute(
                 """
-                INSERT INTO student_attendance (student_id, date, status, marked_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO student_attendance (student_id, class_name, date, status, marked_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (student_id, today, "Present", now_time),
+                (student_id, student_class, today, "present", now_time),
             )
             conn.commit()
         except Exception as e:
@@ -211,17 +237,17 @@ def mark_student_attendance():
             "success": True,
             "message": f"Attendance marked for {match['name']}",
             "student_id": student_id,
-            "student_name": match["name"],
-            "status": "Present",
+            "student_name": student['name'],
+            "status": "present",
             "date": today,
             "time": now_time,
-            "confidence": match["confidence"],
+            "confidence": confidence,
         }), 200
 
     except ValueError as ve:
         return jsonify({"success": False, "error": str(ve)}), 400
     except Exception as e:
-        print("[AUTO_STUDENT_ERROR]", e)
+        logger.error(f"Auto student attendance error: {type(e).__name__}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
@@ -262,7 +288,17 @@ def mark_teacher_attendance():
                 "error": "Face not recognized. Please try again or check camera.",
             }), 200
 
-        teacher_id = match["teacher_id"]
+        person_id_str = str(match.get("person_id"))
+        cur = get_db().cursor()
+        teacher = None
+        if person_id_str.isdigit():
+            teacher = cur.execute("SELECT id, name FROM teachers WHERE id = ?", (int(person_id_str),)).fetchone()
+        if not teacher:
+            teacher = cur.execute("SELECT id, name FROM teachers WHERE id_code = ?", (person_id_str,)).fetchone()
+        if not teacher:
+            return jsonify({"success": False, "error": "Matched person not found in teachers table"}), 200
+        teacher_id = teacher['id']
+        confidence = 1.0 - float(match.get('distance', 1.0))
         if check_already_marked(teacher_id, "teacher"):
             return jsonify({
                 "success": False,
@@ -282,7 +318,7 @@ def mark_teacher_attendance():
                 INSERT INTO teacher_attendance (teacher_id, date, status, marked_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (teacher_id, today, "Present", now_time),
+                (teacher_id, today, "present", now_time),
             )
             conn.commit()
         except Exception as e:
@@ -293,15 +329,15 @@ def mark_teacher_attendance():
             "success": True,
             "message": f"Attendance marked for {match['name']}",
             "teacher_id": teacher_id,
-            "teacher_name": match["name"],
-            "status": "Present",
+            "teacher_name": teacher['name'],
+            "status": "present",
             "date": today,
             "time": now_time,
-            "confidence": match["confidence"],
+            "confidence": confidence,
         }), 200
 
     except ValueError as ve:
         return jsonify({"success": False, "error": str(ve)}), 400
     except Exception as e:
-        print("[AUTO_TEACHER_ERROR]", e)
+        logger.error(f"Auto teacher attendance error: {type(e).__name__}")
         return jsonify({"success": False, "error": "Internal server error"}), 500

@@ -113,11 +113,7 @@ export default function ParentDashboard() {
           color="purple"
         />
 
-        <ActionButton
-          label="Chatbot"
-          onClick={() => navigate("/chatbot")}
-          color="orange"
-        />
+
       </div>
 
       {/* Recent Logs */}

@@ -27,6 +27,40 @@ def setup_teacher_attendance_table():
 def before_request_handler():
     setup_teacher_attendance_table()
 
+def _mark_teacher_attendance_helper(teacher_id, status="present"):
+    """Helper function to mark teacher attendance. Can be called from other modules."""
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    marked_at_ts = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    db = get_db()
+    cur = db.cursor()
+
+    try:
+        cur.execute(
+            """
+            INSERT INTO teacher_attendance (teacher_id, date, status, marked_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(teacher_id, date) 
+            DO UPDATE SET status=excluded.status, marked_at=excluded.marked_at
+            """,
+            (teacher_id, date, status, marked_at_ts),
+        )
+
+        # Also update the teacher's last_seen timestamp
+        cur.execute(
+            "UPDATE teachers SET last_seen = ? WHERE id = ?",
+            (datetime.utcnow(), teacher_id)
+        )
+        
+        db.commit()
+        current_app.logger.info(f"Successfully marked teacher attendance for id {teacher_id}")
+        return True, "Attendance saved"
+    except Exception as e:
+        current_app.logger.error(f"mark_teacher_attendance_helper error: {e}")
+        db.rollback()
+        return False, "Failed to save attendance"
+
 @bp.route("/mark", methods=["POST"])
 @jwt_required()
 def mark_teacher_attendance():
@@ -58,6 +92,13 @@ def mark_teacher_attendance():
             """,
             (teacher_id, date, status, marked_at_ts),
         )
+
+        # Also update the teacher's last_seen timestamp
+        cur.execute(
+            "UPDATE teachers SET last_seen = ? WHERE id = ?",
+            (datetime.utcnow(), teacher_id)
+        )
+        
         db.commit()
         
         return jsonify({"message": "Attendance marked successfully"}), 200
@@ -71,7 +112,17 @@ def mark_teacher_attendance():
 @jwt_required()
 def get_teacher_attendance_records():
     identity = get_jwt_identity()
-    teacher_id = identity["id"]
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute("SELECT id FROM teachers WHERE email=?", (identity,))
+    teacher = cur.fetchone()
+    
+    if not teacher:
+        return jsonify({"error": "Teacher not found"}), 404
+        
+    teacher_id = teacher["id"]
 
     db = get_db()
     cur = db.cursor()
@@ -117,3 +168,48 @@ def teacher_attendance_count_today(teacher_id):
         present = 0
 
     return jsonify({"present": present}), 200
+
+
+@bp.route("/all_records", methods=["GET"])
+@jwt_required()
+def get_all_teacher_attendance_records():
+    """
+    [ADMIN ONLY]
+    Fetches all teacher attendance records, optionally filtered by date.
+    """
+    # Role check
+    identity = get_jwt_identity()
+    # A database call is used to get the role, assuming the JWT only contains the user email.
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT role FROM users WHERE email = ?", (identity,))
+    user_role = cur.fetchone()
+
+    if not user_role or user_role['role'] != 'admin':
+        return jsonify({"error": "Admin access required"}), 403
+
+    # Get date filter from query params if available
+    filter_date = request.args.get('date', None)
+
+    if filter_date:
+        query = """
+            SELECT ta.date, ta.status, ta.marked_at, t.name as teacher_name, t.id as teacher_id
+            FROM teacher_attendance ta
+            JOIN teachers t ON ta.teacher_id = t.id
+            WHERE ta.date = ?
+            ORDER BY ta.marked_at DESC
+        """
+        cur.execute(query, (filter_date,))
+    else:
+        query = """
+            SELECT ta.date, ta.status, ta.marked_at, t.name as teacher_name, t.id as teacher_id
+            FROM teacher_attendance ta
+            JOIN teachers t ON ta.teacher_id = t.id
+            ORDER BY ta.marked_at DESC
+        """
+        cur.execute(query)
+
+    rows = cur.fetchall()
+    records = [dict(row) for row in rows]
+
+    return jsonify(records), 200

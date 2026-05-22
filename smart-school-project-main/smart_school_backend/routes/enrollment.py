@@ -4,18 +4,32 @@ import numpy as np
 import json
 import os
 import sqlite3
+import logging
+import sys
 
-from smart_school_backend.utils.db import get_db
-from smart_school_backend.face_engine.encoder import generate_embedding
-from smart_school_backend.models.face_recognition import store_face_embedding, load_all_embeddings
+# Fix imports to work from any directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
+try:
+    from utils.db import get_db
+except ImportError:
+    from smart_school_backend.utils.db import get_db
+
+try:
+    from models.face_recognition import store_face_embedding, load_all_embeddings
+except ImportError:
+    from smart_school_backend.models.face_recognition import store_face_embedding, load_all_embeddings
+
+# NOTE: face_engine.encoder is imported lazily in functions to avoid TensorFlow dependency at startup
 enrollment_bp = Blueprint("enrollment", __name__)
+logger = logging.getLogger(__name__)
 
 def get_current_user_role():
     """Get current user's role from JWT"""
     try:
-        from smart_school_backend.utils.db import get_db as gdb
-        db = gdb()
+        db = get_db()
         cur = db.cursor()
         identity = get_jwt_identity()
         cur.execute("SELECT role FROM users WHERE email = ?", (identity,))
@@ -37,14 +51,20 @@ def enroll_face():
     - Student: Cannot enroll
     """
     try:
-        data = request.json
+        data = request.get_json() or {}
 
         image = data.get("image")
+        images = data.get("images", []) # List of base64 images
         user_id = data.get("user_id")
         role = data.get("role")
+        clear_existing = data.get("clear_existing", True) # Default to true for backward compatibility or simple enrollment
 
-        if not image or not user_id or not role:
-            return jsonify({"error": "Missing required fields"}), 400
+        if not image and not images:
+            return jsonify({"error": "No image provided"}), 400
+        if not user_id or not role:
+            return jsonify({"error": "Missing user_id or role"}), 400
+
+
 
         # Get current user's role and email for authorization
         try:
@@ -54,15 +74,12 @@ def enroll_face():
             cur.execute("SELECT role FROM users WHERE email = ?", (current_identity,))
             user_row = cur.fetchone()
             current_user_role = user_row["role"] if user_row else None
-            print(f"[FACE ENROLL] JWT Identity: {current_identity}, Role: {current_user_role}")
-        except Exception as e:
-            print(f"[FACE ENROLL] Error getting user role: {e}")
+        except Exception:
             current_user_role = None
 
         # Authorization check
         if current_user_role == "admin":
             # Admin can enroll anyone
-            print(f"[FACE ENROLL] Admin authorization passed")
             pass
         elif current_user_role == "teacher":
             # Teacher can only enroll themselves or their students
@@ -90,40 +107,119 @@ def enroll_face():
             else:
                 return jsonify({"error": "Invalid role"}), 400
         else:
-            print(f"[FACE ENROLL] Unauthorized - Role: {current_user_role}")
-            return jsonify({"error": "Unauthorized", "details": f"Role {current_user_role} cannot enroll faces"}), 403
+            return jsonify({"error": "You don't have permission to enroll faces"}), 403
 
-        embedding = generate_embedding(image)
-        if embedding is None:
-            return jsonify({"error": "No face detected"}), 400
+        # Lazy import to avoid TensorFlow dependency at startup
+        try:
+            from face_engine.encoder import generate_embedding
+        except ImportError:
+            from smart_school_backend.face_engine.encoder import generate_embedding
+        
+        all_images = []
+        if image:
+            all_images.append(image)
+        if images:
+            all_images.extend(images)
 
-        # Check for existing faces
+        embeddings_to_save = []
         existing_embeddings = load_all_embeddings()
-        for existing in existing_embeddings:
-            dist = np.linalg.norm(embedding - existing["embedding"])
-            if dist < 0.6:
-                return jsonify({
-                    "error": "This face is already enrolled.",
-                    "existing_user": {
-                        "person_id": existing["person_id"],
-                        "role": existing["role"],
-                        "name": existing["name"]
-                    }
-                }), 409
+        
+        for img in all_images:
+            emb = generate_embedding(img)
+            if emb is None:
+                continue
+            
+            # Check for existing faces (duplicate detection)
+            for existing in existing_embeddings:
+                # Don't flag as duplicate if it's the SAME person we are enrolling
+                # (We use str() for ID because user_id might be string initially)
+                if existing["role"] == role and str(existing["person_id"]) == str(user_id):
+                    continue
+                    
+                dist = np.linalg.norm(emb - existing["embedding"])
+                if dist < 0.6:
+                    return jsonify({
+                        "error": f"One of the face angles is already enrolled by {existing['name']} ({existing['role']}).",
+                        "existing_user": {
+                            "person_id": existing["person_id"],
+                            "role": existing["role"],
+                            "name": existing["name"]
+                        }
+                    }), 409
+            embeddings_to_save.append(emb)
+
+        if not embeddings_to_save:
+            return jsonify({"error": "No faces detected in any of the provided images"}), 400
 
         conn = get_db()
         cur = conn.cursor()
 
         user_data = None
+        numeric_user_id = None  # We'll get the actual numeric ID
+        
         if role == 'student':
-            cur.execute("SELECT name, email, class_name, section FROM students WHERE id = ?", (user_id,))
-            user_data = cur.fetchone()
+            # Try to find by id (numeric), id_code (string), or email (string)
+            if str(user_id).isdigit():
+                cur.execute("SELECT id, name, email, class_name, section FROM students WHERE id = ?", (int(user_id),))
+                user_data = cur.fetchone()
+            if not user_data:
+                cur.execute("SELECT id, name, email, class_name, section FROM students WHERE id_code = ?", (str(user_id),))
+                user_data = cur.fetchone()
+            if not user_data:
+                cur.execute("SELECT id, name, email, class_name, section FROM students WHERE email = ?", (str(user_id),))
+                user_data = cur.fetchone()
+            if user_data:
+                numeric_user_id = user_data['id']
         elif role == 'teacher':
-            cur.execute("SELECT name, email, subject FROM teachers WHERE id = ?", (user_id,))
-            user_data = cur.fetchone()
+            # Try to find by id (numeric), id_code, or email
+            if str(user_id).isdigit():
+                cur.execute("SELECT id, name, email, subject FROM teachers WHERE id = ?", (int(user_id),))
+                user_data = cur.fetchone()
+            if not user_data:
+                cur.execute("SELECT id, name, email, subject FROM teachers WHERE id_code = ?", (str(user_id),))
+                user_data = cur.fetchone()
+            if not user_data:
+                cur.execute("SELECT id, name, email, subject FROM teachers WHERE email = ?", (str(user_id),))
+                user_data = cur.fetchone()
+            if user_data:
+                numeric_user_id = user_data['id']
 
+        # If user not found, allow admin to create a placeholder record automatically
         if not user_data:
-            return jsonify({"error": f"User with id {user_id} and role {role} not found"}), 404
+            if current_user_role == 'admin':
+                if role == 'student':
+                    # create a minimal student record using id_code for correlation
+                    placeholder_name = f"Enrolled_{user_id}"
+                    placeholder_email = f"enroll_{user_id}@example.com"
+                    # Ensure NOT NULL columns have defaults
+                    cur.execute(
+                        "INSERT INTO students (name, email, id_code, class_name, section) VALUES (?, ?, ?, ?, ?)",
+                        (placeholder_name, placeholder_email, str(user_id), 'Unassigned', 'Unassigned')
+                    )
+                    conn.commit()
+                    cur.execute("SELECT id, name, email, class_name, section FROM students WHERE id_code = ?", (str(user_id),))
+                    user_data = cur.fetchone()
+                    if user_data:
+                        numeric_user_id = user_data['id']
+                else:
+                    # create a minimal teacher record
+                    placeholder_name = f"Enrolled_{user_id}"
+                    placeholder_email = f"enroll_{user_id}@example.com"
+                    cur.execute(
+                        "INSERT INTO teachers (name, email, id_code, subject) VALUES (?, ?, ?, ?)",
+                        (placeholder_name, placeholder_email, str(user_id), 'Unknown')
+                    )
+                    conn.commit()
+                    cur.execute("SELECT id, name, email, subject FROM teachers WHERE id_code = ?", (str(user_id),))
+                    user_data = cur.fetchone()
+                    if user_data:
+                        numeric_user_id = user_data['id']
+            else:
+                return jsonify({"error": f"User with id {user_id} and role {role} not found"}), 404
+
+        # If still no user data, error out
+        if not user_data or not numeric_user_id:
+            return jsonify({"error": "Could not find or create user record"}), 404
 
         name = user_data['name']
         email = user_data['email']
@@ -135,21 +231,26 @@ def enroll_face():
             class_name = None
             section = None
 
-        # Use the imported function to store the embedding
-        store_face_embedding(role, user_id, name, email, class_name, section, embedding)
+        # Store embeddings
+        first = True
+        for emb in embeddings_to_save:
+            # Clear existing ONLY on the first insertion of this batch, and only if requested
+            do_clear = clear_existing if first else False
+            store_face_embedding(role, numeric_user_id, name, email, 
+                                class_name, section, 
+                                emb, clear_existing=do_clear)
+            first = False
 
-        print(f"Successfully enrolled face for person_id: {user_id}, role: {role}")
+
         return jsonify({
             "status": "success",
             "message": "Face enrolled successfully",
-            "person_id": user_id,
+            "person_id": numeric_user_id,
             "role": role
         })
 
     except Exception as e:
-        print("Enroll error:", e)
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Enrollment error: {type(e).__name__}")
         return jsonify({"error": "Enrollment failed"}), 500
 
 
@@ -219,7 +320,7 @@ def get_enrollment_details(role, user_id):
         # Fetch user details based on role
         if role == "student":
             cur.execute("""
-                SELECT id, name, email, id_code, class_name, section FROM students WHERE id = ?
+                SELECT id, name, email, id_code, class_name, section from students where id = ?
             """, (user_id,))
             user = cur.fetchone()
             if not user:
@@ -238,7 +339,7 @@ def get_enrollment_details(role, user_id):
         elif role == "teacher":
             cur.execute("""
                 SELECT id, name, email, id_code, subject, is_class_teacher, 
-                       assigned_class, assigned_section FROM teachers WHERE id = ?
+                       assigned_class, assigned_section from teachers where id = ?
             """, (user_id,))
             user = cur.fetchone()
             if not user:
@@ -259,9 +360,7 @@ def get_enrollment_details(role, user_id):
             return jsonify({"error": "Invalid role"}), 400
         
     except Exception as e:
-        print("Get enrollment details error:", e)
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error fetching enrollment details: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch enrollment details"}), 500
 
 
@@ -396,7 +495,5 @@ def update_enrollment_details(role, user_id):
             return jsonify({"error": "Invalid role"}), 400
         
     except Exception as e:
-        print("Update enrollment details error:", e)
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error updating enrollment details: {type(e).__name__}")
         return jsonify({"error": "Failed to update enrollment details"}), 500

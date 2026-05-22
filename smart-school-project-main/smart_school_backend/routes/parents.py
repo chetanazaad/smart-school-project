@@ -4,25 +4,21 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 import sqlite3
 import os
-from models.user import create_user
+import logging
+try:
+    from utils.db import get_db
+    from models.user import create_user
+except ImportError:
+    from smart_school_backend.utils.db import get_db
+    from smart_school_backend.models.user import create_user
 
 bp = Blueprint("parents", __name__)
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------
 # DB helper
 # ----------------------------------------------------------
-def get_db():
-    try:
-        from smart_school_backend.utils.db import get_db as gdb
-        return gdb()
-    except Exception:
-        from flask import current_app
-        db_path = os.path.join(current_app.root_path, "..", "database", "smart_school.db")
-        db_path = os.path.abspath(db_path)
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+# Using get_db from smart_school_backend.utils.db
 
 
 # ----------------------------------------------------------
@@ -47,6 +43,44 @@ def create_parents_table():
 
 # Note: Table creation is handled by init_db.py at startup
 # Do not call create_parents_table() here - it would fail during import
+
+
+# ----------------------------------------------------------
+# GENERATE UNIQUE PARENT ID
+# GET /api/parents/generate-id
+# ----------------------------------------------------------
+@bp.route("/generate-id", methods=["GET"])
+@jwt_required()
+def generate_parent_id():
+    """Generate a unique parent ID with format P1001"""
+    try:
+        import random
+        import time
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # Try up to 10 times to generate unique ID with P prefix
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            n = random.randint(1000, 9999)
+            new_id = f"P{n}"  # Format: P1001, P2543, etc.
+            
+            # Check if ID exists
+            cur.execute("SELECT id FROM parents WHERE id_code = ?", (new_id,))
+            if not cur.fetchone():
+                return jsonify({"id_code": new_id}), 200
+            
+            # If collision, sleep briefly then retry
+            if attempt < max_attempts - 1:
+                time.sleep(0.01 * (attempt + 1))
+        
+        # If we get here, couldn't generate unique ID
+        logger.error("Failed to generate unique parent ID after max attempts")
+        return jsonify({"error": "Could not generate unique parent ID. Too many collisions."}), 500
+    except Exception as e:
+        logger.error(f"Error generating parent ID: {type(e).__name__}")
+        return jsonify({"error": "Failed to generate ID"}), 500
 
 
 # ----------------------------------------------------------
@@ -76,7 +110,7 @@ def get_all_parents():
         return jsonify({"parents": parents}), 200
 
     except Exception as e:
-        print("ERROR get_all_parents:", e)
+        logger.error(f"Error fetching parents: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch parents"}), 500
 
 
@@ -101,6 +135,30 @@ def create_parent():
         db = get_db()
         cur = db.cursor()
 
+        # Check if parent with this email already exists
+        cur.execute("SELECT id FROM parents WHERE email = ?", (email,))
+        if cur.fetchone():
+            return jsonify({"error": "Parent with this email already exists"}), 409
+            
+        # Self-Healing: Check if user account is an ORPHAN
+        cur.execute("SELECT id, role FROM users WHERE email = ?", (email,))
+        user_row = cur.fetchone()
+        if user_row:
+            # Verify if this user actually belongs to any profile
+            cur.execute("SELECT id FROM students WHERE email = ?", (email,))
+            in_students = cur.fetchone()
+            cur.execute("SELECT id FROM teachers WHERE email = ?", (email,))
+            in_teachers = cur.fetchone()
+            cur.execute("SELECT id FROM parents WHERE email = ?", (email,))
+            in_parents = cur.fetchone()
+
+            if not in_students and not in_teachers and not in_parents:
+                logger.warning(f"Found orphaned user account for {email}. Cleaning up for new parent.")
+                cur.execute("DELETE FROM users WHERE email = ?", (email,))
+                db.commit() # Commit deletion immediately
+            else:
+                return jsonify({"error": f"User account with this email already exists as a {user_row['role']}. Please use a different email or delete the existing {user_row['role']} first."}), 409
+
         # Create parent record
         cur.execute(
             "INSERT INTO parents (id_code, name, email, phone) VALUES (?, ?, ?, ?)",
@@ -116,13 +174,13 @@ def create_parent():
                 return jsonify({"message": "Parent created with login credentials", "id": parent_id, "user_id": user_id}), 201
             except Exception as user_err:
                 # Parent created but user creation failed (maybe email exists)
-                print(f"Warning: Parent created (id={parent_id}) but user creation failed:", user_err)
+                logger.warning(f"Parent created but user creation failed: {type(user_err).__name__}")
                 return jsonify({"message": "Parent created but login credentials could not be set (email may already exist)", "id": parent_id}), 201
         else:
             return jsonify({"message": "Parent created", "id": parent_id}), 201
 
     except Exception as e:
-        print("ERROR create_parent:", e)
+        logger.error(f"Error creating parent: {type(e).__name__}")
         return jsonify({"error": "Failed to create parent"}), 500
 
 
@@ -146,7 +204,7 @@ def get_parent(parent_id):
         return jsonify({"parent": dict(row)}), 200
     
     except Exception as e:
-        print("ERROR get_parent:", e)
+        logger.error(f"Error fetching parent: {type(e).__name__}")
         return jsonify({"error": "Failed to fetch parent"}), 500
 
 
@@ -167,7 +225,7 @@ def delete_parent(parent_id):
         return jsonify({"message": "Parent deleted"}), 200
     
     except Exception as e:
-        print("ERROR delete_parent:", e)
+        logger.error(f"Error deleting parent: {type(e).__name__}")
         return jsonify({"error": "Failed to delete parent"}), 500
 
 
@@ -188,5 +246,5 @@ def parent_count():
         return jsonify({"count": row["total"]}), 200
 
     except Exception as e:
-        print("ERROR parent_count:", e)
+        logger.error(f"Error getting parent count: {type(e).__name__}")
         return jsonify({"count": 0}), 200

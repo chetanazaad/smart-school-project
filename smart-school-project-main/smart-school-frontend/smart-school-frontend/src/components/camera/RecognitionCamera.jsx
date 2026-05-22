@@ -146,7 +146,7 @@ export default function RecognitionCamera({ onRecognized, autoRecognize = false,
 
       let data = null;
       try {
-        const res = await axios.post("/face/recognize", { image_base64: b64 });
+        const res = await axios.post("/recognition/recognize", { image_base64: b64 });
         data = res.data;
         setResult(data);
       } catch (e) {
@@ -180,7 +180,7 @@ export default function RecognitionCamera({ onRecognized, autoRecognize = false,
     try {
       setLoading(true);
       setResult(null);
-      const response = await axios.post("/face/recognize", { image_base64: image_to_send });
+      const response = await axios.post("/recognition/recognize", { image_base64: image_to_send });
       const data = response.data;
       setResult(data);
       if (data && data.match && onRecognized) onRecognized({ id: data.person_id || data.id, name: data.name, role: data.role, distance: data.distance });

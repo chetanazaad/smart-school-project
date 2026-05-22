@@ -14,12 +14,9 @@ export default function FaceRecognitionPage() {
         setLoading(true);
 
         try {
-            const res = await recognizeFace({
-                role,
-                image: imageData,
-            });
-
-            setResult(res);
+                const res = await recognizeFace({ image_base64: imageData });
+                // `recognizeFace` returns an axios response promise; take `.data`
+                setResult(res.data);
         } catch (err) {
             console.error("Recognition error:", err);
             setResult({

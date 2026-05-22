@@ -12,8 +12,8 @@ export default function AttendancePage() {
   const fetchAttendance = async () => {
     setLoading(true);
     try {
-      const res = await API.get(`/attendance/today?date=${selectedDate}`);
-      setAttendance(res.data.attendance || []);
+      const res = await API.get(`/teacher-attendance/all_records?date=${selectedDate}`);
+      setAttendance(res.data || []);
       setLoading(false);
     } catch (err) {
       console.error("Error fetching attendance:", err);
@@ -56,7 +56,7 @@ export default function AttendancePage() {
 
           <tbody>
             {attendance.map((a) => (
-              <tr key={a.id} className="text-center">
+              <tr key={a.teacher_id} className="text-center">
                 <td className="p-3 border">{a.teacher_id}</td>
                 <td className="p-3 border">{a.teacher_name}</td>
                 <td className="p-3 border">

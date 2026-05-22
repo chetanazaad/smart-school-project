@@ -1,0 +1,11 @@
+# Ignore venv anywhere in the project
+**/venv/**
+
+# Explicitly ignore the specific folder choking the agent
+smart_school_backend/venv/**
+
+# Ignore other common junk
+**/__pycache__/**
+**/*.pyc
+**/.git/**
+**/node_modules/**

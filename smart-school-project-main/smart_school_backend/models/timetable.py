@@ -1,7 +1,6 @@
 # models/timetable.py
 from smart_school_backend.utils.db import get_db
 
-
 def create_timetable_table():
     """
     Create the timetable table if it doesn't exist.

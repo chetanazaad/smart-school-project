@@ -17,6 +17,7 @@ export default function StudentDashboard() {
   });
 
   const [recent, setRecent] = useState([]);
+  const [currentClass, setCurrentClass] = useState(null);
 
   // Load student statistics
   const loadStats = async () => {
@@ -47,10 +48,25 @@ export default function StudentDashboard() {
     }
   };
 
+  // Load current class info
+  const loadCurrentClass = async () => {
+    try {
+      const res = await API.get(`/timetable/student/${user.id}/current-class`);
+      if (res.data && res.data.has_class) {
+        setCurrentClass(res.data);
+      } else {
+        setCurrentClass(null);
+      }
+    } catch (err) {
+      console.error("Current class error:", err);
+    }
+  };
+
   useEffect(() => {
-    if (token) {
+    if (token && user?.id) {
       loadStats();
       loadRecent();
+      loadCurrentClass();
     }
   }, [user, token]);
 
@@ -66,6 +82,45 @@ export default function StudentDashboard() {
         <SummaryCard title="Attendance %" count={`${stats.percentage}%`} color="purple" />
         <SummaryCard title="Today's Status" count={stats.today_status} color="orange" />
       </div>
+
+      {/* Live Classroom Widget */}
+      {currentClass && (
+        <div className="mb-6 bg-white shadow rounded p-4 border-l-4 border-blue-500">
+          <h2 className="text-xl font-bold text-blue-800 mb-2">Live Class: {currentClass.subject}</h2>
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1">
+              <p className="text-gray-700"><strong>Teacher:</strong> {currentClass.teacher_name}</p>
+              <p className="text-gray-700"><strong>Time:</strong> {currentClass.start_time} - {currentClass.end_time}</p>
+              
+              {!currentClass.teacher_present ? (
+                <div className="mt-4 bg-yellow-50 border border-yellow-200 text-yellow-800 p-3 rounded">
+                  <p className="font-semibold">Teacher is currently marked absent.</p>
+                  <p className="text-sm mt-1">Please watch today's substitute study material video on the right.</p>
+                </div>
+              ) : (
+                <div className="mt-4 bg-green-50 border border-green-200 text-green-800 p-3 rounded">
+                  <p className="font-semibold">Teacher is present.</p>
+                  <p className="text-sm mt-1">Please pay attention to the live lecture!</p>
+                </div>
+              )}
+            </div>
+            
+            {!currentClass.teacher_present && currentClass.video_url && (
+              <div className="flex-1 rounded overflow-hidden shadow-sm">
+                <iframe 
+                  width="100%" 
+                  height="215" 
+                  src={currentClass.video_url} 
+                  title="Substitute Study Material" 
+                  frameBorder="0" 
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                  allowFullScreen
+                ></iframe>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <h2 className="text-xl font-semibold mb-2">Quick Actions</h2>

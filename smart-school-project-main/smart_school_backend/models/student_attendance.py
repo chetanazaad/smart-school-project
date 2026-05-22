@@ -10,9 +10,14 @@ def create_student_attendance_table():
         CREATE TABLE IF NOT EXISTS student_attendance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            status TEXT NOT NULL,
-            marked_at TEXT NOT NULL,
+            class_name TEXT NOT NULL,
+            date DATE NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('present', 'absent', 'leave')),
+            marked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            marked_by INTEGER,
+            notes TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+            FOREIGN KEY(marked_by) REFERENCES users(id),
             UNIQUE(student_id, date)
         )
     """)

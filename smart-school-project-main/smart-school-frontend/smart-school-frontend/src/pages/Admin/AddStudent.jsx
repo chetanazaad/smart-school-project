@@ -1,5 +1,5 @@
 // src/pages/Admin/AddStudent.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import API from "../../services/api";
 import { useNavigate } from "react-router-dom";
 import CameraCapture from "../../components/camera/CameraCapture";
@@ -16,25 +16,68 @@ export default function AddStudent() {
     password: "",
     confirmPassword: "",
   });
-  const [createdId, setCreatedId] = useState(null);
-  const [imageBase64, setImageBase64] = useState(null);
+  const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const addImage = (b64) => {
+    if (images.length < 3) {
+      setImages([...images, b64]);
+    } else {
+      alert("You have already captured 3 photos. Delete one to take a new one.");
+    }
+  };
+
+  const removeImage = (index) => {
+    setImages(images.filter((_, i) => i !== index));
+  };
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  // generate default ID like ST1001
-  const generateStudentId = () => {
-    const n = Math.floor(1000 + Math.random() * 9000);
-    return `ST${n}`;
-  };
+  // generate default ID like ST0001
+  const generateStudentId = useCallback(async () => {
+    try {
+      const res = await API.get("/students/generate-id");
+      return res.data.id_code;
+    } catch (err) {
+      console.error("Error generating student ID:", err);
+      // Fallback
+      const n = Math.floor(1000 + Math.random() * 9000);
+      return `ST${n}`;
+    }
+  }, []);
 
   useEffect(() => {
-    if (!form.id_code) setForm((f) => ({ ...f, id_code: generateStudentId() }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const initializeId = async () => {
+      if (!form.id_code) {
+        const newId = await generateStudentId();
+        setForm((f) => ({ ...f, id_code: newId }));
+      }
+    };
+    initializeId();
+  }, [form.id_code, generateStudentId]);
+
+  // Validate password strength
+  const validatePassword = (password) => {
+    if (password.length < 8) {
+      return "Password must be at least 8 characters long";
+    }
+    if (!/[A-Z]/.test(password)) {
+      return "Password must contain at least one uppercase letter";
+    }
+    if (!/[a-z]/.test(password)) {
+      return "Password must contain at least one lowercase letter";
+    }
+    if (!/[0-9]/.test(password)) {
+      return "Password must contain at least one digit";
+    }
+    if (!/[!@#$%^&*(),.?\":{}|<>]/.test(password)) {
+      return "Password must contain at least one special character";
+    }
+    return null;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -46,8 +89,10 @@ export default function AddStudent() {
       return;
     }
 
-    if (form.password.length < 6) {
-      setError("Password must be at least 6 characters");
+    // Password strength validation
+    const passwordError = validatePassword(form.password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
@@ -56,8 +101,9 @@ export default function AddStudent() {
       return;
     }
 
-    if (!imageBase64) {
-      setError("Please enroll the student's face using the camera before submitting.");
+    if (images.length < 3) {
+      setError("Please enroll exactly 3 face photos from different angles (front, left, right).");
+      setLoading(false);
       return;
     }
 
@@ -74,20 +120,28 @@ export default function AddStudent() {
         password: form.password,
       });
 
-      const studentId = createRes.data?.id;
-      setCreatedId(studentId || null);
+      // 2) Enroll multiple face images using EMAIL (Unique ID)
+      await API.post("/enrollment/enroll", {
+        role: "student",
+        user_id: form.email, // Use unique email as requested
+        images: images,
+        clear_existing: true
+      });
 
-      // 2) Enroll face using the unified API
-      if (studentId) {
-        await API.post("/face/enroll", {
-          role: "student",
-          user_id: studentId,
-          image: imageBase64,
-        });
-      }
-
-      window.dispatchEvent(new CustomEvent("entityChanged"));
+      // Reset form on success, fetching new ID
+      const nextId = await generateStudentId();
+      setForm({
+        roll_number: "",
+        id_code: nextId,
+        name: "",
+        email: "",
+        class_name: "1",
+        section: "A",
+        password: "",
+        confirmPassword: "",
+      });
       navigate("/admin/students");
+
     } catch (err) {
       console.error("Add student failed:", err);
       setError(err.response?.data?.error || "Enrollment failed. See console for details.");
@@ -116,7 +170,10 @@ export default function AddStudent() {
             onChange={handleChange}
             className="border p-3 rounded w-full"
           />
-          <button type="button" onClick={() => setForm(f => ({...f, id_code: generateStudentId()}))} className="px-3 py-2 bg-gray-200 rounded">New</button>
+          <button type="button" onClick={async () => {
+            const newId = await generateStudentId();
+            setForm(f => ({ ...f, id_code: newId }));
+          }} className="px-3 py-2 bg-gray-200 rounded">New</button>
         </div>
 
         <input
@@ -127,15 +184,7 @@ export default function AddStudent() {
           className="border p-3 rounded w-full"
         />
 
-        {createdId && (
-          <input
-            name="id"
-            placeholder="Created ID"
-            value={createdId}
-            readOnly
-            className="border p-3 rounded w-full bg-gray-100 mt-2"
-          />
-        )}
+
 
         <input
           name="name"
@@ -168,7 +217,7 @@ export default function AddStudent() {
         <label className="block">
           <span className="text-sm">Section</span>
           <select name="section" value={form.section} onChange={handleChange} className="border p-3 rounded w-full mt-1">
-            {["A","B","C","D","E","F"].map((s) => (
+            {["A", "B", "C", "D", "E", "F"].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
@@ -176,7 +225,7 @@ export default function AddStudent() {
 
         <div className="bg-blue-50 p-4 rounded border border-blue-200">
           <h3 className="font-semibold text-blue-900 mb-3">Login Credentials</h3>
-          
+
           <input
             name="password"
             type="password"
@@ -196,16 +245,35 @@ export default function AddStudent() {
             className="border p-3 rounded w-full"
             required
           />
-          <p className="text-sm text-gray-600 mt-2">Password must be at least 6 characters</p>
+          <p className="text-sm text-gray-600 mt-2">
+            Password must be at least 8 characters with uppercase, lowercase, digit, and special character
+          </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-2">Enroll Face (required)</label>
-          <CameraCapture onCapture={(b64) => setImageBase64(b64)} />
-          {imageBase64 && (
-            <img src={imageBase64} alt="captured" className="mt-3 w-48 h-auto rounded border" />
-          )}
+          <label className="block text-sm font-medium mb-2">Enroll Face (3 angles recommended for max accuracy)</label>
+          <CameraCapture onCapture={addImage} />
+
+          <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
+            {images.map((img, idx) => (
+              <div key={idx} className="relative group">
+                <img src={img} alt={`captured-${idx}`} className="w-24 h-24 object-cover rounded border shadow-sm" />
+                <button
+                  type="button"
+                  onClick={() => removeImage(idx)}
+                  className="absolute -top-2 -right-2 bg-red-600 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-700 shadow-md"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {images.length === 0 && <p className="text-gray-400 text-sm italic">No photos captured yet.</p>}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Photos captured: {images.length}/3. Tip: Capture front, left, and right angles.
+          </p>
         </div>
+
 
         <button
           type="submit"

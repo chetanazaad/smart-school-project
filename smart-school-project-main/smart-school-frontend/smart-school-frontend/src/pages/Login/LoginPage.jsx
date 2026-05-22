@@ -7,7 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 
 export default function LoginPage() {
   const [role, setRole] = useState("admin");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("admin@school.com");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
@@ -97,6 +97,7 @@ export default function LoginPage() {
             Modern Day School
           </h1>
           <p className="text-gray-500 font-medium">Welcome to Smart School</p>
+          <p className="text-xs text-gray-400 mt-2">Default admin: email <strong>admin@school.com</strong> / password <strong>admin123</strong></p>
         </div>
 
         {error && (

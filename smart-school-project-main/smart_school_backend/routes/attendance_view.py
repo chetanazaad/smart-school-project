@@ -1,8 +1,10 @@
 # routes/attendance_view.py
 from flask import Blueprint, jsonify, request
 from smart_school_backend.utils.db import get_db
+import logging
 
 attendance_view_bp = Blueprint("attendance_view", __name__)
+logger = logging.getLogger(__name__)
 
 @attendance_view_bp.route("/all", methods=["GET"])
 def get_all_attendance():
@@ -63,10 +65,6 @@ def get_all_attendance():
         return jsonify({"records": data}), 200
         
     except Exception as e:
-        import traceback
-        print(f"Error fetching all attendance. Query: {final_query}, Params: {params}")
-        print("Error:", e)
-        traceback.print_exc()
+        logger.error(f"Error fetching attendance: {type(e).__name__}")
         # Return an empty list if a table doesn't exist, etc.
-        # This can happen if no students/teachers have been marked present yet.
         return jsonify({"records": [], "error": str(e)}), 200

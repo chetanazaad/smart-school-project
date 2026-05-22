@@ -39,59 +39,69 @@ def mark_attendance():
         today = date_module.today().isoformat()
 
         try:
+            from datetime import datetime
             if ptype == "student":
-                # pid may be numeric student id or full_id like ST10001
-                try:
-                    sid = int(pid)
-                except Exception:
-                    # if full_id like ST10001, extract numeric part
-                    sid = int(str(pid).replace("ST", "")) - 10000
+                # Check by ID, id_code, or email
+                user_data = None
+                if str(pid).isdigit():
+                    cur.execute("SELECT id, class_name FROM students WHERE id=?", (int(pid),))
+                    user_data = cur.fetchone()
+                if not user_data:
+                    cur.execute("SELECT id, class_name FROM students WHERE id_code=?", (str(pid),))
+                    user_data = cur.fetchone()
+                if not user_data:
+                    cur.execute("SELECT id, class_name FROM students WHERE email=?", (str(pid),))
+                    user_data = cur.fetchone()
 
-                cur.execute(
-                    "SELECT id, class_name FROM students WHERE id=?",
-                    (sid,)
-                )
-                s = cur.fetchone()
-                if not s:
+                if not user_data:
                     return jsonify({"error": "Student not found"}), 404
+
+                sid = user_data["id"]
+                class_name = user_data["class_name"]
 
                 # idempotent insert
                 cur.execute(
                     "SELECT id FROM student_attendance WHERE student_id = ? AND date = ?",
-                    (s["id"], today),
+                    (sid, today),
                 )
                 if not cur.fetchone():
                     cur.execute(
                         "INSERT INTO student_attendance (student_id, class_name, date, status, marked_at) VALUES (?, ?, ?, 'present', ?)",
-                        (s["id"], s["class_name"], today, datetime.utcnow().isoformat()),
+                        (sid, class_name, today, datetime.utcnow().isoformat()),
                     )
                     db.commit()
 
-                return jsonify({"success": True, "marked": {"id": s["id"], "date": today}}), 200
+                return jsonify({"success": True, "marked": {"id": sid, "date": today}}), 200
 
             elif ptype == "teacher":
-                try:
-                    tid = int(pid)
-                except Exception:
-                    tid = int(str(pid).replace("T", "")) - 1000
+                user_data = None
+                if str(pid).isdigit():
+                    cur.execute("SELECT id FROM teachers WHERE id=?", (int(pid),))
+                    user_data = cur.fetchone()
+                if not user_data:
+                    cur.execute("SELECT id FROM teachers WHERE id_code=?", (str(pid),))
+                    user_data = cur.fetchone()
+                if not user_data:
+                    cur.execute("SELECT id FROM teachers WHERE email=?", (str(pid),))
+                    user_data = cur.fetchone()
 
-                cur.execute("SELECT id FROM teachers WHERE id=?", (tid,))
-                t = cur.fetchone()
-                if not t:
+                if not user_data:
                     return jsonify({"error": "Teacher not found"}), 404
+
+                tid = user_data["id"]
 
                 cur.execute(
                     "SELECT id FROM teacher_attendance WHERE teacher_id = ? AND date = ?",
-                    (t["id"], today),
+                    (tid, today),
                 )
                 if not cur.fetchone():
                     cur.execute(
                         "INSERT INTO teacher_attendance (teacher_id, date, status, marked_at) VALUES (?, ?, 'present', ?)",
-                        (t["id"], today, datetime.utcnow().isoformat()),
+                        (tid, today, datetime.utcnow().isoformat()),
                     )
                     db.commit()
 
-                return jsonify({"success": True, "marked": {"id": t["id"], "date": today}}), 200
+                return jsonify({"success": True, "marked": {"id": tid, "date": today}}), 200
 
         except Exception as e:
             current_app.logger.error("mark_attendance shorthand failed: %s", e)
@@ -161,13 +171,14 @@ def recent_attendance():
 
     try:
         # Combine recent student and teacher attendance into a single feed.
+        # We now select id_code directly from the joined tables.
         cur.execute(
             """
-            SELECT sa.marked_at as marked_at, s.name as name, 'student' as role, sa.student_id as id, sa.class_name as class_name, sa.status as status
+            SELECT sa.marked_at as marked_at, s.name as name, 'student' as role, sa.student_id as id, sa.class_name as class_name, sa.status as status, s.id_code as id_code
             FROM student_attendance sa
             JOIN students s ON s.id = sa.student_id
             UNION ALL
-            SELECT ta.marked_at as marked_at, t.name as name, 'teacher' as role, ta.teacher_id as id, NULL as class_name, ta.status as status
+            SELECT ta.marked_at as marked_at, t.name as name, 'teacher' as role, ta.teacher_id as id, NULL as class_name, ta.status as status, t.id_code as id_code
             FROM teacher_attendance ta
             JOIN teachers t ON t.id = ta.teacher_id
             ORDER BY marked_at DESC
@@ -178,30 +189,24 @@ def recent_attendance():
         rows = cur.fetchall()
 
         for row in rows:
-            marked_at = row[0] or ""
+            marked_at = row["marked_at"] or ""
             date_part = marked_at.split("T")[0] if "T" in marked_at else (marked_at.split(" ")[0] if marked_at else "")
             time_part = marked_at.split("T")[1].split(".")[0] if "T" in marked_at else (marked_at.split(" ")[1] if len(marked_at.split(" "))>1 else "")
 
-            # Format full id: students -> ST10001, teachers -> T1001
-            role = row[2]
-            pid = row[3]
-            if role == "student" and pid is not None:
-                full_id = f"ST{10000 + int(pid)}"
-            elif role == "teacher" and pid is not None:
-                full_id = f"T{1000 + int(pid)}"
-            else:
-                full_id = None
+            # Use the actual id_code from database
+            full_id = row["id_code"]
+            pid = row["id"]
 
             records.append(
                 {
                     "date": date_part,
                     "time": time_part,
-                    "name": row[1],
-                    "type": row[2],
+                    "name": row["name"],
+                    "type": row["role"],
                     "id": pid,
                     "full_id": full_id,
-                    "class_name": row[4],
-                    "status": row[5],
+                    "class_name": row["class_name"],
+                    "status": row["status"],
                 }
             )
 
@@ -275,6 +280,62 @@ def teachers_today_count():
 
 
 # -------------------------------------------------------------------
+# ADMIN DASHBOARD → TEACHER ATTENDANCE RECORDS
+# -------------------------------------------------------------------
+@bp.route("/teachers/records", methods=["GET"])
+@jwt_required()
+def get_teacher_attendance_records_admin():
+    """
+    Endpoint for Admin Dashboard to fetch detailed historical teacher attendance records.
+    Allows filtering by teacher_id, start_date, and end_date.
+    GET /api/attendance/teachers/records?teacher_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>
+    """
+    teacher_id = request.args.get("teacher_id", type=int)
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+
+    db = get_db()
+    cur = db.cursor()
+    records = []
+
+    try:
+        query = """
+            SELECT ta.id, ta.date, ta.status, ta.marked_at, t.name as teacher_name, t.id as teacher_id
+            FROM teacher_attendance ta
+            JOIN teachers t ON t.id = ta.teacher_id
+        """
+        params = []
+        conditions = []
+
+        if teacher_id:
+            conditions.append("ta.teacher_id = ?")
+            params.append(teacher_id)
+        if start_date_str:
+            conditions.append("ta.date >= ?")
+            params.append(start_date_str)
+        if end_date_str:
+            conditions.append("ta.date <= ?")
+            params.append(end_date_str)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY ta.date DESC, t.name ASC"
+
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+        for row in rows:
+            records.append(dict(row))
+
+    except Exception as e:
+        current_app.logger.error("get_teacher_attendance_records_admin failed: %s", e)
+        return jsonify({"error": "Failed to fetch teacher attendance records"}), 500
+
+    return jsonify({"records": records, "count": len(records)}), 200
+
+
+# -------------------------------------------------------------------
 # ADMIN DASHBOARD → TEACHER'S RECENT ATTENDANCE VIEW
 # -------------------------------------------------------------------
 
@@ -294,26 +355,56 @@ def teacher_recent_attendance(teacher_id):
     records = []
 
     try:
-        # Fetch students taught by this teacher + their recent attendance
-        cur.execute(
-            """
-            SELECT DISTINCT sa.date,
-                   s.name,
-                   s.class_name,
-                   sa.status
-            FROM student_attendance AS sa
-            JOIN students AS s ON s.id = sa.student_id
-            ORDER BY sa.date DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        # Get teacher class info
+        cur.execute("SELECT is_class_teacher, assigned_class, assigned_section FROM teachers WHERE id=?", (teacher_id,))
+        teacher = cur.fetchone()
+        
+        if not teacher:
+            return jsonify({"records": [], "data": []}), 200
+
+        # Fetch recent student attendance
+        # If class teacher, only show their students. Otherwise show all (or could filter by subjects)
+        if teacher["is_class_teacher"] and teacher["assigned_class"]:
+            cur.execute(
+                """
+                SELECT sa.marked_at,
+                       s.name,
+                       s.class_name,
+                       sa.status
+                FROM student_attendance AS sa
+                JOIN students AS s ON s.id = sa.student_id
+                WHERE s.class_name = ? AND s.section = ?
+                ORDER BY sa.marked_at DESC
+                LIMIT ?
+                """,
+                (teacher["assigned_class"], teacher["assigned_section"], limit),
+            )
+        else:
+            # For regular teachers, maybe show all recent? 
+            # Or restricted to students they teach? For now, let's keep it simple.
+            cur.execute(
+                """
+                SELECT sa.marked_at,
+                       s.name,
+                       s.class_name,
+                       sa.status
+                FROM student_attendance AS sa
+                JOIN students AS s ON s.id = sa.student_id
+                ORDER BY sa.marked_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
         rows = cur.fetchall()
 
         for row in rows:
+            marked_at = row[0] or ""
+            time_part = marked_at.split("T")[1].split(".")[0] if "T" in marked_at else (marked_at.split(" ")[1] if (marked_at and len(marked_at.split(" "))>1) else "")
+            
             records.append(
                 {
-                    "date": row[0],
+                    "date": marked_at.split("T")[0] if "T" in marked_at else (marked_at.split(" ")[0] if marked_at else ""),
+                    "time": time_part,
                     "name": row[1],
                     "class_name": row[2],
                     "status": row[3],
@@ -326,7 +417,7 @@ def teacher_recent_attendance(teacher_id):
         )
         records = []
 
-    return jsonify({"records": records}), 200
+    return jsonify({"records": records, "data": records}), 200
 
 
 # -------------------------------------------------------------------
@@ -338,19 +429,40 @@ def teacher_recent_attendance(teacher_id):
 def teacher_attendance_today_count(teacher_id):
     """
     Get count of students marked present today (for teacher dashboard).
-    GET /api/attendance/teacher/{id}/today
-
-    Returns: { "present": 5 }
+    Wait - this should probably return students for THAT teacher's class.
+    But for now we just fixed the table query.
     """
+    from datetime import date as date_module
+    
     today = date_module.today().strftime("%Y-%m-%d")
     db = get_db()
     cur = db.cursor()
 
     try:
-        cur.execute(
-            "SELECT COUNT(*) FROM student_attendance WHERE date = ? AND status = 'present'",
-            (today,),
-        )
+        # Get teacher class info
+        cur.execute("SELECT is_class_teacher, assigned_class, assigned_section FROM teachers WHERE id=?", (teacher_id,))
+        teacher = cur.fetchone()
+        
+        if not teacher:
+            return jsonify({"present": 0}), 200
+
+        if teacher["is_class_teacher"] and teacher["assigned_class"]:
+            # Count only their students
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM student_attendance sa
+                JOIN students s ON s.id = sa.student_id
+                WHERE sa.date = ? AND sa.status = 'present'
+                AND s.class_name = ? AND s.section = ?
+                """,
+                (today, teacher["assigned_class"], teacher["assigned_section"]),
+            )
+        else:
+            # Regular teacher or missing class info - fallback to global or 0
+            cur.execute(
+                "SELECT COUNT(*) FROM student_attendance WHERE date = ? AND status = 'present'",
+                (today,),
+            )
         present = cur.fetchone()[0] or 0
     except Exception as e:
         current_app.logger.warning("teacher_attendance_today_count failed: %s", e)

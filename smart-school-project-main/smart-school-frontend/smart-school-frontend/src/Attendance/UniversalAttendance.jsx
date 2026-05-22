@@ -66,7 +66,7 @@ export default function UniversalAttendance() {
     const frame = captureFrame();
 
     try {
-      const res = await api.post("/face/recognize", { image_base64: frame });
+      const res = await api.post("/recognition/recognize", { image_base64: frame });
       const data = res.data;
 
       if (data.match) {

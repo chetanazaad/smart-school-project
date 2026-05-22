@@ -7,8 +7,6 @@ import AppLayout from "../components/layout/AppLayout";
 /* LOGIN */
 import LoginPage from "../pages/Login/LoginPage";
 
-
-
 /* ADMIN */
 import AdminDashboard from "../pages/Admin/AdminDashboard";
 import AdminSettings from "../pages/Admin/AdminSettings";
@@ -25,6 +23,8 @@ import AddTimetable from "../pages/Admin/AddTimetable";
 import EditTimetable from "../pages/Admin/EditTimetable";
 import AdminAttendancePage from "../pages/Admin/AdminAttendancePage";
 import AIReportsPage from "../pages/Admin/AIReportsPage";
+import UsersPage from "../pages/Admin/UsersPage";
+
 
 /* TEACHER */
 import TeacherDashboard from "../pages/Teacher/TeacherDashboard";
@@ -33,6 +33,7 @@ import TeacherEnrollStudent from "../pages/Teacher/TeacherEnrollStudent";
 import TeacherAttendancePage from "../pages/Teacher/TeacherAttendancePage";
 import UploadNotesPage from "../pages/Teacher/UploadNotesPage";
 import TeacherAiReportsPage from "../pages/Teacher/TeacherAiReportsPage";
+import ClassTeacherStudents from "../pages/Teacher/ClassTeacherStudents";
 
 /* STUDENT */
 import StudentDashboard from "../pages/Student/StudentDashboard";
@@ -43,8 +44,7 @@ import StudentAttendancePage from "../pages/Student/StudentAttendancePage";
 import ParentDashboard from "../pages/Parent/ParentDashboard";
 import ParentPerformance from "../pages/Parent/ParentPerformance";
 
-/* CHATBOT */
-import ChatbotPage from "../pages/Chatbot/ChatbotPage";
+
 
 export default function AppRoutes() {
   return (
@@ -195,6 +195,16 @@ export default function AppRoutes() {
             }
           />
 
+          <Route
+            path="/admin/users"
+            element={
+              <ProtectedRoute allowedRoles={["admin"]}>
+                <AppLayout><UsersPage /></AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+
           {/* ---------------- TEACHER ROUTES ---------------- */}
 
           <Route
@@ -251,6 +261,15 @@ export default function AppRoutes() {
             }
           />
 
+          <Route
+            path="/teacher/students"
+            element={
+              <ProtectedRoute allowedRoles={["teacher"]}>
+                <AppLayout><ClassTeacherStudents /></AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
           {/* ---------------- STUDENT ROUTES ---------------- */}
 
           <Route
@@ -300,15 +319,7 @@ export default function AppRoutes() {
             }
           />
 
-          {/* CHATBOT (ALL ROLES) */}
-          <Route
-            path="/chatbot"
-            element={
-              <ProtectedRoute>
-                <AppLayout><ChatbotPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
+
 
           {/* FALLBACK */}
           <Route path="*" element={<Navigate to="/login" replace />} />

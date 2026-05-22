@@ -29,10 +29,9 @@ const AppLayout = ({ children }) => {
     { label: "Timetable", path: "/admin/timetable", icon: <FiBookOpen /> },
     { section: "AI" },
     { label: "AI Reports", path: "/admin/ai-reports", icon: <FiPieChart /> },
-    { section: "Chat" },
-    { label: "Chatbot", path: "/chatbot", icon: <FiMessageCircle /> },
     { section: "Account" },
     { label: "Settings", path: "/admin/settings", icon: <FiSettings /> },
+    { label: "System Accounts", path: "/admin/users", icon: <FiUsers /> },
   ];
 
   const teacherMenu = [
@@ -46,8 +45,6 @@ const AppLayout = ({ children }) => {
     { label: "Upload Notes", path: "/teacher/upload-notes", icon: <FiUpload /> },
     { section: "AI" },
     { label: "AI Tutor Reports", path: "/teacher/ai-reports", icon: <FiPieChart /> },
-    { section: "Chat" },
-    { label: "Chatbot", path: "/chatbot", icon: <FiMessageCircle /> },
   ];
 
   const studentMenu = [
@@ -56,8 +53,6 @@ const AppLayout = ({ children }) => {
     { label: "My Attendance", path: "/student/my-attendance", icon: <FiClipboard /> },
     { section: "Academics" },
     { label: "My Timetable", path: "/student/timetable", icon: <FiBookOpen /> },
-    { section: "Chat" },
-    { label: "Chatbot", path: "/chatbot", icon: <FiMessageCircle /> },
   ];
 
   const parentMenu = [

@@ -1,5 +1,5 @@
 // src/pages/Admin/AIReportsPage.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import API from "../../services/api";
 
 export default function AIReportsPage() {
@@ -10,7 +10,7 @@ export default function AIReportsPage() {
 
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const s = await API.get("/students");
       const t = await API.get("/teachers");
@@ -27,11 +27,11 @@ export default function AIReportsPage() {
       console.error("Error loading AI summary:", err);
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   if (loading) return <div className="p-6 text-xl">Loading analytics...</div>;
 

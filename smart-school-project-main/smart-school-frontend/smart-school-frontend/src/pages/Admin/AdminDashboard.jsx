@@ -162,6 +162,47 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      <div className="mt-8">
+        <h2 className="text-xl font-bold mb-4">Recent Attendance</h2>
+        <div className="bg-white shadow rounded overflow-hidden">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
+              <tr>
+                <th className="px-4 py-3">Time</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">ID</th>
+                <th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">Class</th>
+                <th className="px-4 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {recent.length > 0 ? (
+                recent.map((record, index) => (
+                  <tr key={index} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm">{record.time}</td>
+                    <td className="px-4 py-3 text-sm font-medium">{record.name}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{record.full_id || record.id}</td>
+                    <td className="px-4 py-3 text-sm capitalize">{record.type}</td>
+                    <td className="px-4 py-3 text-sm">{record.class_name || "—"}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${record.status === 'present' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                        {record.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6" className="px-4 py-8 text-center text-gray-400">No logs found</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   );
 }

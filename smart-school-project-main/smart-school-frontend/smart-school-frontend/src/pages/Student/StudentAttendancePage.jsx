@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
+import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 
 export default function StudentAttendancePage() {
@@ -9,11 +9,12 @@ export default function StudentAttendancePage() {
   const fetchData = async () => {
     if (!user?.id) return;
 
-    const res = await axios.get(
-      `http://127.0.0.1:5000/api/student-attendance/get-attendance/${user.id}`
-    );
-
-    setRecords(res.data.records);
+    try {
+      const res = await api.get(`/student-attendance/student/${user.id}`);
+      setRecords(res.data.records || []);
+    } catch (err) {
+      console.error("Failed to fetch student attendance:", err);
+    }
   };
 
   useEffect(() => {
@@ -29,14 +30,16 @@ export default function StudentAttendancePage() {
           <tr>
             <th className="p-2 border">Date</th>
             <th className="p-2 border">Time</th>
+            <th className="p-2 border">Status</th>
           </tr>
         </thead>
 
         <tbody>
-          {records.map((r) => (
-            <tr>
+          {records.map((r, i) => (
+            <tr key={i}>
               <td className="p-2 border">{r.date}</td>
               <td className="p-2 border">{r.time}</td>
+              <td className="p-2 border capitalize">{r.status}</td>
             </tr>
           ))}
         </tbody>
