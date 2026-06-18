@@ -1,0 +1,50 @@
+{
+  "info": {
+    "name": "AI-Powered-School API",
+    "_postman_id": "quiz-api-collection",
+    "description": "Collection for /api/generate-quiz and /api/submit-quiz",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Generate Quiz",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"paragraph\": \"Photosynthesis is the process by which plants use sunlight to synthesize foods from carbon dioxide and water.\",\n  \"num_questions\": 5\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:5000/api/generate-quiz",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "5000",
+          "path": ["api", "generate-quiz"]
+        }
+      }
+    },
+    {
+      "name": "Submit Quiz",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"StudentName\",\n  \"student_id\": \"S100\",\n  \"answers\": [0,1,2,0,1],\n  \"answer_key\": [0,1,2,0,1]\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:5000/api/submit-quiz",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "5000",
+          "path": ["api", "submit-quiz"]
+        }
+      }
+    }
+  ]
+}
